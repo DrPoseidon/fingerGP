@@ -43,17 +43,15 @@ final class RaceAudio {
         engine.mainMixerNode.outputVolume = RaceAudio.isMuted ? 0 : 1
     }
 
-    func start() {
-        guard !engine.isRunning else { return }
-        try? engine.start()
-    }
+    private lazy var keeper = AudioKeeper(engine: engine, name: "race")
 
-    func stop() {
-        engine.stop()
-    }
+    func start() { keeper.start() }
+
+    func stop() { keeper.stop() }
 
     /// Применить настройку «без звука» (её переключает кнопка на экране гонки).
     func syncMute() {
+        keeper.tick()
         let volume: Float = RaceAudio.isMuted ? 0 : 1
         if engine.mainMixerNode.outputVolume != volume { engine.mainMixerNode.outputVolume = volume }
     }

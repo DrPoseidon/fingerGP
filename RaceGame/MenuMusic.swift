@@ -34,17 +34,15 @@ final class MenuMusic {
         syncMute()
     }
 
-    func start() {
-        guard !engine.isRunning else { return }
-        try? engine.start()
-    }
+    private lazy var keeper = AudioKeeper(engine: engine, name: "menu")
 
-    func stop() {
-        engine.stop()
-    }
+    func start() { keeper.start() }
+
+    func stop() { keeper.stop() }
 
     /// Общая настройка «без звука» с гонкой.
     func syncMute() {
+        keeper.tick()
         let volume: Float = RaceAudio.isMuted ? 0 : 1
         if engine.mainMixerNode.outputVolume != volume { engine.mainMixerNode.outputVolume = volume }
     }
