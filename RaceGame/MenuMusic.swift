@@ -15,14 +15,20 @@ final class MenuMusic {
 
         let output = engine.outputNode.inputFormat(forBus: 0)
         let sampleRate = output.sampleRate > 0 ? output.sampleRate : 48_000
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else { return }
+        // Стерео: ревербератор на устройствах не принимает моно (ошибка -10868 при запуске движка).
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) else { return }
         let player = self.player
         player.sampleRate = Float(sampleRate)
         Player.warmUp()
         let node = AVAudioSourceNode(format: format) { _, _, frameCount, bufferList in
             let buffers = UnsafeMutableAudioBufferListPointer(bufferList)
             guard let data = buffers.first?.mData?.assumingMemoryBound(to: Float.self) else { return noErr }
-            player.render(into: data, count: Int(frameCount))
+            let count = Int(frameCount)
+            player.render(into: data, count: count)
+            // Тот же сигнал во второй канал (формат неинтерливный — у каждого канала свой буфер).
+            for channel in buffers.dropFirst() {
+                channel.mData?.assumingMemoryBound(to: Float.self).update(from: data, count: count)
+            }
             return noErr
         }
         reverb.loadFactoryPreset(.mediumHall)
@@ -30,7 +36,7 @@ final class MenuMusic {
         engine.attach(node)
         engine.attach(reverb)
         engine.connect(node, to: reverb, format: format)
-        engine.connect(reverb, to: engine.mainMixerNode, format: nil)
+        engine.connect(reverb, to: engine.mainMixerNode, format: format)
         syncMute()
     }
 
