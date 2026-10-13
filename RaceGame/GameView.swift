@@ -30,6 +30,7 @@ struct GameView: UIViewRepresentable {
 
     func makeCoordinator() -> GameController { GameController(definition: track, state: state) }
     func makeUIView(context: Context) -> ARView { context.coordinator.makeView() }
+    static func dismantleUIView(_ uiView: ARView, coordinator: GameController) { coordinator.shutdown() }
     func updateUIView(_ uiView: ARView, context: Context) {
         context.coordinator.restartIfNeeded(token: restartToken)
     }
@@ -59,6 +60,8 @@ final class GameController: NSObject {
     private var hudTimer: Float = 0
     private var minimapTimer: Float = 0
     private var throttle: Float = 0
+    private let audio = RaceAudio()
+    private let haptics = RaceHaptics()
     private var wrongWayTimer: Float = 0
 
     /// Демо-режим для проверки без касаний: запуск с аргументом `-autopilot`.
@@ -135,6 +138,7 @@ final class GameController: NSObject {
         }
 
         anchor.addChild(camera)
+        audio.start()
 
         let press = UILongPressGestureRecognizer(target: self, action: #selector(handleTouch(_:)))
         press.minimumPressDuration = 0
@@ -210,12 +214,15 @@ final class GameController: NSObject {
         if autopilot { driveAutopilot(dt: dt) }
 
         // Поребрик — часть трассы: скорость теряется, только когда машина целиком за ним.
-        let offTrack = track.distanceFromCenterline(follower.position) > track.halfWidth + track.curbWidth + 0.3
+        let fromCenter = track.distanceFromCenterline(follower.position)
+        let offTrack = fromCenter > track.halfWidth + track.curbWidth + 0.3
+        // На поребрике — когда колёса одной стороны на нём (центр машины ближе ~0.4 м к краю асфальта).
+        let onCurb = !offTrack && fromCenter > track.halfWidth - 0.4
         let oldSpeed = follower.speed
         follower.step(dt: dt, finger: finger, offTrack: offTrack)
         car?.update(position: follower.position, heading: follower.heading, speed: follower.speed,
                     steer: follower.steer, braking: follower.braking, dt: dt)
-        updateEffects(oldSpeed: oldSpeed, offTrack: offTrack, dt: dt)
+        updateEffects(oldSpeed: oldSpeed, offTrack: offTrack, onCurb: onCurb, dt: dt)
         updateWrongWay(dt: dt)
 
         updateCamera(dt: dt)
@@ -262,7 +269,7 @@ final class GameController: NSObject {
     }
 
     /// Выхлоп гуще при разгоне; дым из-под колёс — в резком повороте (близко к пределу сцепления) и при сносе.
-    private func updateEffects(oldSpeed: Float, offTrack: Bool, dt: Float) {
+    private func updateEffects(oldSpeed: Float, offTrack: Bool, onCurb: Bool, dt: Float) {
         let accel = (follower.speed - oldSpeed) / dt
         throttle += (simd_clamp(accel / 12, 0, 1) - throttle) * (1 - exp(-dt / 0.15))
         var smoke: Float = 0
@@ -271,6 +278,18 @@ final class GameController: NSObject {
             smoke = simd_clamp(max(cornering, follower.slide * 2), 0, 1)
         }
         car?.updateEffects(speed: follower.speed, throttle: throttle, smoke: smoke)
+
+        // Визг шин звучит ровно тогда, когда из-под колёс идёт дым, и с той же силой.
+        audio.syncMute()
+        audio.update(speed: follower.speed, maxSpeed: follower.maxSpeed, throttle: throttle,
+                     squeal: smoke, onCurb: onCurb, onGrass: offTrack)
+        haptics.update(speed: follower.speed, onCurb: onCurb, onGrass: offTrack, dt: dt)
+    }
+
+    /// Остановить звук при уходе с экрана гонки.
+    func shutdown() {
+        audio.stop()
+        updateSubscription?.cancel()
     }
 
     /// «Не то направление»: машина едет против хода трассы дольше секунды.
@@ -283,7 +302,10 @@ final class GameController: NSObject {
             wrongWayTimer = max(wrongWayTimer - dt * 3, 0)
         }
         let wrongWay = wrongWayTimer >= 1 || (state.wrongWay && wrongWayTimer > 0)
-        if wrongWay != state.wrongWay { state.wrongWay = wrongWay }
+        if wrongWay != state.wrongWay {
+            state.wrongWay = wrongWay
+            if wrongWay { haptics.wrongWay() }
+        }
     }
 
     private func updateMarkers() {
@@ -324,7 +346,10 @@ final class GameController: NSObject {
             } else if passedHalfway {
                 state.laps += 1
                 state.bestLap = min(state.bestLap ?? .infinity, lapTime)
-                LapRecords.recordLap(track.definition.id, time: lapTime)
+                let hadRecord = LapRecords.bestLap(track.definition.id) != nil
+                let record = LapRecords.recordLap(track.definition.id, time: lapTime) && hadRecord
+                audio.play(record ? .record : .lap)
+                haptics.lap(record: record)
                 lapTime = 0
             }
             passedHalfway = false

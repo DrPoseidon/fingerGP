@@ -334,6 +334,7 @@ struct RaceView: View {
     let onExit: () -> Void
     @State private var state = GameState()
     @State private var restartToken = 0
+    @State private var muted = RaceAudio.isMuted
 
     var body: some View {
         ZStack {
@@ -353,6 +354,10 @@ struct RaceView: View {
             VStack {
                 HStack(spacing: 10) {
                     Spacer()
+                    CircleButton(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill") {
+                        muted.toggle()
+                        RaceAudio.isMuted = muted
+                    }
                     CircleButton(systemName: "arrow.counterclockwise") { restartToken += 1 }
                     CircleButton(systemName: "house.fill", action: onExit)
                 }
