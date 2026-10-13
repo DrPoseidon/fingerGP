@@ -279,10 +279,9 @@ final class GameController: NSObject {
         }
         car?.updateEffects(speed: follower.speed, throttle: throttle, smoke: smoke)
 
-        // Визг шин звучит ровно тогда, когда из-под колёс идёт дым, и с той же силой.
         audio.syncMute()
         audio.update(speed: follower.speed, maxSpeed: follower.maxSpeed, throttle: throttle,
-                     squeal: smoke, onCurb: onCurb, onGrass: offTrack)
+                     onCurb: onCurb, onGrass: offTrack)
         haptics.update(speed: follower.speed, onCurb: onCurb, onGrass: offTrack, dt: dt)
     }
 

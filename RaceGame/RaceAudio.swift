@@ -3,7 +3,7 @@ import UIKit
 import simd
 
 /// Звук гонки — синтезируется в реальном времени, без звуковых файлов:
-/// мотор (гармоники, плавно растущие со скоростью), визг шин (непрерывный тон с обертонами и шумом трения),
+/// мотор (гармоники, плавно растущие со скоростью),
 /// рокот поребриков и травы, короткие сигналы круга и рекорда.
 ///
 /// Игровой цикл раз в кадр вызывает `update(...)`; звуковой поток читает параметры и плавно к ним подтягивается.
@@ -57,11 +57,10 @@ final class RaceAudio {
     }
 
     /// - Parameters:
-    ///   - speed: м/с; `throttle`, `squeal` — 0…1; `onCurb`/`onGrass` — где сейчас колёса.
-    func update(speed: Float, maxSpeed: Float, throttle: Float, squeal: Float, onCurb: Bool, onGrass: Bool) {
+    ///   - speed: м/с; `throttle` — 0…1; `onCurb`/`onGrass` — где сейчас колёса.
+    func update(speed: Float, maxSpeed: Float, throttle: Float, onCurb: Bool, onGrass: Bool) {
         synth.targetRPM = RaceAudio.rpm(speed: speed, maxSpeed: maxSpeed)
         synth.targetThrottle = throttle
-        synth.targetSqueal = squeal
         synth.targetCurb = onCurb ? min(speed / 15, 1) : 0
         synth.targetGrass = onGrass ? min(speed / 25, 1) : 0
         synth.speed = speed
@@ -86,7 +85,6 @@ private final class Synth: @unchecked Sendable {
 
     var targetRPM: Float = 0.25
     var targetThrottle: Float = 0
-    var targetSqueal: Float = 0
     var targetCurb: Float = 0
     var targetGrass: Float = 0
     var speed: Float = 0
@@ -96,7 +94,6 @@ private final class Synth: @unchecked Sendable {
     // Сглаженные значения (только звуковой поток).
     private var rpm: Float = 0.25
     private var throttle: Float = 0
-    private var squeal: Float = 0
     private var curb: Float = 0
     private var grass: Float = 0
 
@@ -104,11 +101,6 @@ private final class Synth: @unchecked Sendable {
     private var curbPhase: Float = 0
     private var noiseSeed: UInt32 = 0x1234_5678
     // Фильтры шума: для шипения шин и для рокота.
-    private var squealPhase: Float = 0, squealWobblePhase: Float = 0
-    private var squealDrift: Float = 0, squealJitter: Float = 0, hissLowCut: Float = 0
-    private var resLow: [Float] = [0, 0, 0, 0], resBand: [Float] = [0, 0, 0, 0]
-    /// Основной тон визга шин, Гц (в записи-образце ~1.6 кГц, по просьбе — выше).
-    var squealPitch: Float = 2800
     private var grassLP: Float = 0
     private var curbLP: Float = 0
     private var engineLP: Float = 0
@@ -142,7 +134,6 @@ private final class Synth: @unchecked Sendable {
         for i in 0..<count {
             rpm += (targetRPM - rpm) * smooth
             throttle += (targetThrottle - throttle) * slowSmooth
-            squeal += (targetSqueal - squeal) * slowSmooth
             curb += (targetCurb - curb) * smooth
             grass += (targetGrass - grass) * smooth
 
@@ -157,37 +148,6 @@ private final class Synth: @unchecked Sendable {
             engineLP += (noise() - engineLP) * 0.2
             engineSample += engineLP * 0.25 * throttle
             let engineVolume = 0.08 + 0.12 * throttle + 0.14 * rpm
-
-            // Визг шин — по образцу записи пробуксовки: непрерывный тон ~1.6 кГц с обертонами
-            // (~3.2 и ~4.8 кГц, третий ярче второго), высота беспорядочно плавает и быстро дрожит (тон размыт в полосу шириной ~100 Гц),
-            // поверх — широкий шум трения. Громкость и чуть высота растут с силой заноса.
-            squealWobblePhase += twoPi * (2.3 + 0.8 * squealDrift) / sr
-            if squealWobblePhase > twoPi { squealWobblePhase -= twoPi }
-            squealDrift += (noise() - squealDrift) * 0.0004            // медленный случайный дрейф
-            squealJitter += (noise() - squealJitter) * 0.03             // быстрое дрожание — «размывает» тон в полосу
-            let pitch = squealPitch * (1 + 0.04 * squeal)
-                * (1 + 0.006 * sin(squealWobblePhase) + 0.03 * squealDrift + 0.035 * squealJitter)
-            squealPhase += twoPi * pitch / sr
-            if squealPhase > twoPi * 2 { squealPhase -= twoPi * 2 }
-            let q = squealPhase
-            // Тон «размыт» в полосы, как в записи: основной — синус плюс резонатор, обертоны — резонаторы
-            // (шум через узкие полосовые фильтры на 2f, 3f, 4f шириной ~100–200 Гц).
-            let excitation = noise()
-            func resonate(_ i: Int, _ freq: Float, _ damping: Float) -> Float {
-                let f = 2 * sin(Float.pi * min(freq, sr * 0.22) / sr)
-                resLow[i] += f * resBand[i]
-                resBand[i] += f * (excitation - resLow[i] - damping * resBand[i])
-                return resBand[i]
-            }
-            let tone = 1.0 * sin(q)
-                + 0.35 * resonate(0, pitch, 0.025)
-                + 0.3 * resonate(1, pitch * 2.02, 0.02)
-                + 0.4 * resonate(2, pitch * 2.95, 0.018)
-                + 0.12 * resonate(3, pitch * 3.95, 0.016)
-            let raw = noise()
-            hissLowCut += (raw - hissLowCut) * 0.13                    // шум трения: всё ниже ~1 кГц вычитаем
-            let hiss = raw - hissLowCut
-            let squealSample = (tone * 0.065 + hiss * 0.13) * (0.9 + 0.1 * squealJitter) * squeal
 
             // Поребрики: низкий шум, «нарезанный» с частотой смены полос (полоса 1.8 м).
             curbPhase += twoPi * max(speed / 1.8, 1) / sr
@@ -212,7 +172,7 @@ private final class Synth: @unchecked Sendable {
                 self.chimeSample += 1
             }
 
-            let mix = engineSample * engineVolume + squealSample + curbSample + grassSample + chimeSample
+            let mix = engineSample * engineVolume + curbSample + grassSample + chimeSample
             out[i] = tanh(mix * 1.4) * 0.8
         }
     }
