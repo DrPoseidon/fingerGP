@@ -1,0 +1,11 @@
+# Сборка Xcode
+build/
+DerivedData/
+*.xcresult
+
+# Пользовательские настройки Xcode
+xcuserdata/
+*.xcuserstate
+
+# macOS
+.DS_Store
