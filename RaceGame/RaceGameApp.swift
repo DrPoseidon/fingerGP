@@ -76,6 +76,7 @@ extension Screen {
 
 struct MenuView: View {
     let onPlay: () -> Void
+    @State private var muted = RaceAudio.isMuted
 
     var body: some View {
         VStack(spacing: 0) {
@@ -106,6 +107,13 @@ struct MenuView: View {
             Spacer().frame(height: 110)
         }
         .padding(.horizontal, 24)
+        .overlay(alignment: .topTrailing) {
+            CircleButton(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill") {
+                muted.toggle()
+                RaceAudio.isMuted = muted
+            }
+            .padding(.trailing, 16)
+        }
     }
 }
 

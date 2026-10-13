@@ -109,8 +109,8 @@ private final class Synth: @unchecked Sendable {
     private var squealPhase: Float = 0, squealWobblePhase: Float = 0
     private var squealDrift: Float = 0, squealJitter: Float = 0, hissLowCut: Float = 0
     private var resLow: [Float] = [0, 0, 0, 0], resBand: [Float] = [0, 0, 0, 0]
-    /// Основной тон визга шин, Гц (в записи-образце ~1.6 кГц).
-    var squealPitch: Float = 1600
+    /// Основной тон визга шин, Гц (в записи-образце ~1.6 кГц, по просьбе — выше).
+    var squealPitch: Float = 2800
     private var grassLP: Float = 0
     private var curbLP: Float = 0
     private var engineLP: Float = 0
@@ -189,7 +189,7 @@ private final class Synth: @unchecked Sendable {
             let raw = noise()
             hissLowCut += (raw - hissLowCut) * 0.13                    // шум трения: всё ниже ~1 кГц вычитаем
             let hiss = raw - hissLowCut
-            let squealSample = (tone * 0.09 + hiss * 0.15) * (0.9 + 0.1 * squealJitter) * squeal
+            let squealSample = (tone * 0.065 + hiss * 0.13) * (0.9 + 0.1 * squealJitter) * squeal
 
             // Поребрики: низкий шум, «нарезанный» с частотой смены полос (полоса 1.8 м).
             curbPhase += twoPi * max(speed / 1.8, 1) / sr

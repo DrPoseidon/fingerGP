@@ -8,6 +8,7 @@ struct FlyoverView: UIViewRepresentable {
     func makeCoordinator() -> FlyoverController { FlyoverController() }
     func makeUIView(context: Context) -> UIView { context.coordinator.makeView() }
     func updateUIView(_ uiView: UIView, context: Context) {}
+    static func dismantleUIView(_ uiView: UIView, coordinator: FlyoverController) { coordinator.shutdown() }
 }
 
 @MainActor
@@ -31,6 +32,7 @@ final class FlyoverController {
     private var switching = false
     /// Сколько кадров уже отрисовано — затемнение снимается сразу после первых кадров, не дожидаясь машины.
     private var renderedFrames = 0
+    private let music = MenuMusic()
 
     private let segmentDuration: Float = 22
     private let grip: Float = 30            // м/с² — машина на фоне сбрасывает скорость в поворотах
@@ -56,6 +58,7 @@ final class FlyoverController {
         container.addSubview(fadeView)
 
         view.scene.addAnchor(anchor)
+        music.start()
         anchor.addChild(SceneSetup.makeSun())
         camera.camera.fieldOfViewInDegrees = 55
         anchor.addChild(camera)
@@ -75,6 +78,12 @@ final class FlyoverController {
         return container
     }
 
+    /// Уход из меню в гонку: музыку и обновление сцены — стоп.
+    func shutdown() {
+        music.stop()
+        updateSubscription?.cancel()
+    }
+
     private func showTrack(_ newTrack: Track) {
         trackEntity?.removeFromParent()
         track = newTrack
@@ -91,6 +100,7 @@ final class FlyoverController {
         guard dt > 0 else { return }
 
         renderedFrames += 1
+        music.syncMute()
         if renderedFrames == 3 {
             UIView.animate(withDuration: 0.6) { self.fadeView.alpha = 0 }
         }
