@@ -59,7 +59,7 @@ final class GameController: NSObject {
     private var ghost: Ghost?
     private var bestSplits: [Double]?
     private var recording = Ghost()
-    private var ghostCar: CarEntity?
+    private var ghostCar: GhostCar?
     private var deltaTimer: Float = 0
     // Возврат на трассу (настройка): сколько секунд машина за поребриком и где съехала с трассы.
     private let resetToTrack = RaceSettings.resetToTrack
@@ -141,13 +141,6 @@ final class GameController: NSObject {
                 anchor.addChild(car.root)
                 car.update(position: self.follower.position, heading: self.follower.heading,
                            speed: 0, steer: 0, braking: false, dt: 0)
-
-                // Призрак лучшего круга — та же модель, полупрозрачная.
-                let ghostCar = try await CarEntity.load(scale: carScale)
-                ghostCar.root.components.set(OpacityComponent(opacity: 0.35))
-                ghostCar.root.isEnabled = false
-                anchor.addChild(ghostCar.root)
-                self.ghostCar = ghostCar
             } catch {
                 print("Не удалось загрузить race_car.usdz: \(error)")
             }
@@ -169,6 +162,11 @@ final class GameController: NSObject {
 
         anchor.addChild(camera)
         audio.start()
+
+        let ghostCar = GhostCar(scale: carScale)
+        ghostCar.root.isEnabled = false
+        anchor.addChild(ghostCar.root)
+        self.ghostCar = ghostCar
 
         // Затемнение при возврате на трассу: только сцена, HUD SwiftUI остаётся видимым поверх.
         fadeView.backgroundColor = .black
@@ -471,8 +469,7 @@ final class GameController: NSObject {
             return
         }
         ghostCar.root.isEnabled = true
-        ghostCar.update(position: pose.position, heading: pose.heading, speed: pose.speed,
-                        steer: 0, braking: false, dt: dt)
+        ghostCar.update(position: pose.position, heading: pose.heading)
     }
 
     /// Возврат на трассу: сцена затемняется, машина ставится на осевую линию там, где съехала,
