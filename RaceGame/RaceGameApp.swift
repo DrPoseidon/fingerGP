@@ -4,6 +4,7 @@ import simd
 @main
 struct RaceGameApp: App {
     init() {
+        LapRecords.dropLegacyRecords()
         // Модель машины грузится сразу при запуске, параллельно с показом меню.
         Task { @MainActor in _ = try? await CarEntity.load(scale: 1) }
     }

@@ -20,6 +20,18 @@ enum LapRecords {
         defaults.integer(forKey: "laps.\(id.rawValue)")
     }
 
+    /// Разовая миграция: рекорды, поставленные до честного зачёта и призрака, не имеют записи призрака
+    /// и могли быть со срезкой. Их сбрасываем (число кругов остаётся) — первый честный круг станет рекордом.
+    static func dropLegacyRecords() {
+        let flag = "migration.legacyRecordsDropped.v1"
+        guard !defaults.bool(forKey: flag) else { return }
+        for id in TrackID.allCases where bestLap(id) != nil && !Ghost.exists(for: id) {
+            defaults.removeObject(forKey: "bestLap.\(id.rawValue)")
+            defaults.removeObject(forKey: "splits.\(id.rawValue)")
+        }
+        defaults.set(true, forKey: flag)
+    }
+
     /// Сбросить статистику трассы (для отладки: аргумент запуска `-resetRecords`).
     static func reset(_ id: TrackID) {
         for key in ["bestLap", "splits", "laps"] { defaults.removeObject(forKey: "\(key).\(id.rawValue)") }
@@ -71,6 +83,11 @@ struct Ghost {
             Array(raw.bindMemory(to: SIMD4<Float>.self).prefix(count))
         }
         return Ghost(samples: samples)
+    }
+
+    static func exists(for id: TrackID) -> Bool {
+        guard let url = url(for: id) else { return false }
+        return FileManager.default.fileExists(atPath: url.path)
     }
 
     static func delete(for id: TrackID) {
