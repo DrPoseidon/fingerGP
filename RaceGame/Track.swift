@@ -250,6 +250,22 @@ struct Track {
         add(mesh(fromQuads: whiteCells), white, to: root)
         add(mesh(fromQuads: blackCells), black, to: root)
 
+        // Отсечки секторов (те же, что в LapTimer и на мини-карте) — жёлтые полосы поперёк асфальта.
+        let yellow = SimpleMaterial(color: UIColor(red: 1, green: 0.82, blue: 0.2, alpha: 1), roughness: 0.8, isMetallic: false)
+        var sectorLines: [[SIMD3<Float>]] = []
+        for k in 1..<LapTimer.sectorCount {
+            let i = points.count * k / LapTimer.sectorCount
+            let p = points[i], t = tangents[i], nrm = normals[i]
+            let offsets: [(Float, Float)] = [(-0.6, -halfWidth), (0.6, -halfWidth), (0.6, halfWidth), (-0.6, halfWidth)]
+            var corners: [SIMD3<Float>] = []
+            for (u, v) in offsets {
+                let q: SIMD2<Float> = p + t * u + nrm * v
+                corners.append(SIMD3(q.x, 0.05, q.y))
+            }
+            sectorLines.append(corners)
+        }
+        add(mesh(fromQuads: sectorLines), yellow, to: root)
+
         addTrees(to: root)
         return root
     }

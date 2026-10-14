@@ -5,14 +5,16 @@
 траекторию и тормозит.
 
 <p align="center">
-  <img src="docs/screenshots/menu.png" width="250" alt="Главное меню">
-  <img src="docs/screenshots/modes.png" width="250" alt="Выбор режима">
-  <img src="docs/screenshots/tracks.png" width="250" alt="Выбор трассы">
+  <img src="docs/screenshots/menu.png" width="200" alt="Главное меню">
+  <img src="docs/screenshots/modes.png" width="200" alt="Выбор режима">
+  <img src="docs/screenshots/tracks.png" width="200" alt="Выбор трассы">
+  <img src="docs/screenshots/settings.png" width="200" alt="Настройки">
 </p>
 <p align="center">
-  <img src="docs/screenshots/monza.png" width="250" alt="Монца">
-  <img src="docs/screenshots/nordschleife.png" width="250" alt="Нордшляйфе">
-  <img src="docs/screenshots/spa.png" width="250" alt="Спа">
+  <img src="docs/screenshots/ghost.png" width="200" alt="Призрак лучшего круга и время сектора">
+  <img src="docs/screenshots/monza.png" width="200" alt="Монца">
+  <img src="docs/screenshots/nordschleife.png" width="200" alt="Нордшляйфе">
+  <img src="docs/screenshots/spa.png" width="200" alt="Спа">
 </p>
 
 ## Что есть в игре
@@ -27,6 +29,7 @@
 - **Настройки выезда за трассу** (шестерёнка в меню): не засчитывать круг или игнорировать выезды;
   опционально — возвращать машину на трассу (затемнение на секунду, штраф +2 с к кругу).
 - **Время по секторам:** на каждой отсечке и на финише — разница с лучшим кругом («−0.32» зелёным, «+0.15» красным).
+  Отсечки отмечены жёлтыми полосами на трассе и штрихами на мини-карте.
 - **Призрак лучшего круга:** полупрозрачная машина и точка на мини-карте повторяют рекорд трассы.
 - **Режим «Тренировка»** со статистикой: лучший круг и число кругов по каждой трассе сохраняются.
   Режим «Гонка» — в планах.
@@ -50,7 +53,7 @@
 | `-track oval\|monza\|spa\|nordschleife` | трасса для `-autopilot` |
 | `-reverse` | демо-палец едет против хода трассы |
 | `-wobble` | демо-палец «дрожит» — проверка сглаживания линии |
-| `-screen mode\|select` | открыть сразу выбор режима или трассы |
+| `-screen mode\|select\|settings` | открыть сразу выбор режима, трассы или настройки |
 | `-drift` | демо-палец раз за круг уводит машину на траву (проверка выездов) |
 | `-settings.resetToTrack YES`, `-settings.offTrackRule ignore` | включить настройки выезда без меню |
 | `-resetRecords` | сбросить рекорд, сектора и призрак открываемой трассы |

@@ -78,7 +78,8 @@ extension Screen {
 struct MenuView: View {
     let onPlay: () -> Void
     @State private var muted = RaceAudio.isMuted
-    @State private var showSettings = false
+    /// `-screen settings` — открыть меню сразу с настройками (для скриншотов).
+    @State private var showSettings = ProcessInfo.processInfo.arguments.contains("settings")
 
     var body: some View {
         VStack(spacing: 0) {
