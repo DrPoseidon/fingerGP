@@ -32,6 +32,7 @@ struct LapTimer {
     private(set) var splits: [Double] = []
     private var offStreak: Double = 0
     private var offTotal: Double = 0
+    private var pendingInvalidation = false
 
     /// - Parameters:
     ///   - pointCount: число точек осевой линии; индекс 0 — линия старта.
@@ -49,6 +50,10 @@ struct LapTimer {
         let prev = prevProgress
         prevProgress = progress
 
+        if pendingInvalidation {
+            pendingInvalidation = false
+            events.append(.invalidated)
+        }
         if isRunning {
             lapTime += dt
             if offTrack {
@@ -100,6 +105,13 @@ struct LapTimer {
         lapTime += seconds
     }
 
+    /// Аннулировать текущий круг (возврат на трассу при правиле «не засчитывать»). Событие — в следующем `update`.
+    mutating func invalidate() {
+        guard isRunning, isValid else { return }
+        isValid = false
+        pendingInvalidation = true
+    }
+
     /// Машину вернули на трассу: текущий выезд не считается срезкой (за него уже назначен штраф).
     mutating func forgiveCurrentExcursion() {
         offTotal = max(offTotal - offStreak, 0)
@@ -113,5 +125,6 @@ struct LapTimer {
         splits = []
         offStreak = 0
         offTotal = 0
+        pendingInvalidation = false
     }
 }

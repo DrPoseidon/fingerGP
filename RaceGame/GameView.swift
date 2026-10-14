@@ -63,8 +63,7 @@ final class GameController: NSObject {
     private var deltaTimer: Float = 0
     // Возврат на трассу (настройка): сколько секунд машина за поребриком и где съехала с трассы.
     private let resetToTrack = RaceSettings.resetToTrack
-    /// С возвратом на трассу выезд наказывается штрафом, а не незасчётом круга: срезать всё равно не выйдет.
-    private static var invalidatesOnOffTrack: Bool { RaceSettings.offTrackRule == .invalidate && !RaceSettings.resetToTrack }
+    private static var invalidatesOnOffTrack: Bool { RaceSettings.offTrackRule == .invalidate }
     private var offTrackStreak: Float = 0
     private var lastOnTrackDistance: Float = 0
     private var resetting = false
@@ -620,9 +619,16 @@ final class GameController: NSObject {
         car?.update(position: frame.position, heading: heading, speed: 0, steer: 0, braking: false, dt: 0)
         offTrackStreak = 0
         lapTimer.forgiveCurrentExcursion()
-        lapTimer.addPenalty(RaceSettings.resetPenalty)
+        // «Не засчитывать круг» — выезд с возвратом аннулирует круг; «Игнорировать» — только штраф по времени.
+        let invalidates = GameController.invalidatesOnOffTrack && lapTimer.isRunning
+        if invalidates {
+            lapTimer.invalidate()
+        } else {
+            lapTimer.addPenalty(RaceSettings.resetPenalty)
+        }
         GameController.lapLog.info("respawn at distance=\(self.lastOnTrackDistance) lapTime=\(self.lapTimer.lapTime)")
-        showBanner(String(format: "Возврат на трассу · +%.0f с", RaceSettings.resetPenalty), good: false,
+        showBanner(invalidates ? "Возврат на трассу · круг не засчитан"
+                   : String(format: "Возврат на трассу · +%.0f с", RaceSettings.resetPenalty), good: false,
                    icon: "arrow.uturn.backward.circle.fill")
         snapCamera()
     }

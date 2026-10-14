@@ -196,7 +196,9 @@ struct SettingsView: View {
                         .font(.system(size: 17, weight: .bold))
                 }
                 .tint(Color(red: 0.86, green: 0.13, blue: 0.13))
-                Text(String(format: "Через полсекунды за поребриком экран затемняется, машина появляется на трассе там, где съехала, а к времени круга добавляется штраф +%.0f с. Круг при этом не аннулируется.", RaceSettings.resetPenalty))
+                Text(offTrackRule == OffTrackRule.invalidate.rawValue
+                     ? "Через полсекунды за поребриком экран затемняется и машина появляется на трассе там, где съехала. Круг не засчитывается."
+                     : String(format: "Через полсекунды за поребриком экран затемняется, машина появляется на трассе там, где съехала, а к времени круга добавляется штраф +%.0f с.", RaceSettings.resetPenalty))
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
