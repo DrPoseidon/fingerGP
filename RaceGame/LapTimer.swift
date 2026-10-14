@@ -19,6 +19,8 @@ struct LapTimer {
     static let sectorCount = 3
     let maxOffTrackStreak: Double = 1.0
     let maxOffTrackTotal: Double = 3.0
+    /// false — выезды за трассу не влияют на зачёт (настройка «Игнорировать»). Отсечки всё равно нужны.
+    var invalidatesOnOffTrack = true
 
     private let pointCount: Int
     private let boundaries: [Int]
@@ -55,7 +57,7 @@ struct LapTimer {
             } else {
                 offStreak = 0
             }
-            if isValid && (offStreak > maxOffTrackStreak || offTotal > maxOffTrackTotal) {
+            if invalidatesOnOffTrack && isValid && (offStreak > maxOffTrackStreak || offTotal > maxOffTrackTotal) {
                 isValid = false
                 events.append(.invalidated)
             }
@@ -90,6 +92,18 @@ struct LapTimer {
             lapTime = 0
         }
         return events
+    }
+
+    /// Штраф: добавить время к текущему кругу.
+    mutating func addPenalty(_ seconds: Double) {
+        guard isRunning else { return }
+        lapTime += seconds
+    }
+
+    /// Машину вернули на трассу: текущий выезд не считается срезкой (за него уже назначен штраф).
+    mutating func forgiveCurrentExcursion() {
+        offTotal = max(offTotal - offStreak, 0)
+        offStreak = 0
     }
 
     private mutating func startLap() {

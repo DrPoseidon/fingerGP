@@ -77,6 +77,7 @@ extension Screen {
 struct MenuView: View {
     let onPlay: () -> Void
     @State private var muted = RaceAudio.isMuted
+    @State private var showSettings = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -108,11 +109,19 @@ struct MenuView: View {
         }
         .padding(.horizontal, 24)
         .overlay(alignment: .topTrailing) {
-            CircleButton(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill") {
-                muted.toggle()
-                RaceAudio.isMuted = muted
+            HStack(spacing: 10) {
+                CircleButton(systemName: "gearshape.fill") { showSettings = true }
+                CircleButton(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill") {
+                    muted.toggle()
+                    RaceAudio.isMuted = muted
+                }
             }
             .padding(.trailing, 16)
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
         }
     }
 }
@@ -149,6 +158,50 @@ struct RecordsPanel: View {
         .frame(maxWidth: 340)
         .background(.ultraThinMaterial.opacity(0.9), in: RoundedRectangle(cornerRadius: 18))
         .environment(\.colorScheme, .dark)
+    }
+}
+
+// MARK: - Настройки
+
+struct SettingsView: View {
+    @AppStorage(RaceSettings.offTrackRuleKey) private var offTrackRule = OffTrackRule.invalidate.rawValue
+    @AppStorage(RaceSettings.resetToTrackKey) private var resetToTrack = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            Text("Настройки")
+                .font(.system(size: 28, weight: .heavy, design: .rounded))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Выезд за трассу")
+                    .font(.system(size: 17, weight: .bold))
+                Picker("Выезд за трассу", selection: $offTrackRule) {
+                    ForEach(OffTrackRule.allCases) { Text($0.title).tag($0.rawValue) }
+                }
+                .pickerStyle(.segmented)
+                Text(offTrackRule == OffTrackRule.ignore.rawValue
+                     ? "Круг засчитывается, даже если срезать по траве."
+                     : "Круг не засчитывается, если машина дольше секунды за поребриком или в сумме больше 3 секунд за круг.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle(isOn: $resetToTrack) {
+                    Text("Возвращать на трассу")
+                        .font(.system(size: 17, weight: .bold))
+                }
+                .tint(Color(red: 0.86, green: 0.13, blue: 0.13))
+                Text(String(format: "Через полсекунды за поребриком экран затемняется, машина появляется на трассе там, где съехала, а к времени круга добавляется штраф +%.0f с. Круг при этом не аннулируется.", RaceSettings.resetPenalty))
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
+        .padding(24)
+        .padding(.top, 8)
     }
 }
 
@@ -455,7 +508,7 @@ struct HUDView: View {
             }
             if let banner = state.banner {
                 HStack(spacing: 10) {
-                    Image(systemName: state.bannerIsGood ? "trophy.fill" : "xmark.octagon.fill")
+                    Image(systemName: state.bannerIcon)
                         .font(.system(size: 20, weight: .heavy))
                     Text(banner.uppercased())
                         .font(.system(size: 20, weight: .black, design: .rounded))

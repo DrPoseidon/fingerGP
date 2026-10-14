@@ -27,6 +27,7 @@ final class GameState {
     /// Короткое сообщение по центру: «Новый рекорд!», «Круг не засчитан».
     var banner: String?
     var bannerIsGood = false
+    var bannerIcon = "xmark.octagon.fill"
 
     func reset() {
         speedKmh = 0

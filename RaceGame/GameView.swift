@@ -61,6 +61,16 @@ final class GameController: NSObject {
     private var recording = Ghost()
     private var ghostCar: CarEntity?
     private var deltaTimer: Float = 0
+    // Возврат на трассу (настройка): сколько секунд машина за поребриком и где съехала с трассы.
+    private let resetToTrack = RaceSettings.resetToTrack
+    /// С возвратом на трассу выезд наказывается штрафом, а не незасчётом круга: срезать всё равно не выйдет.
+    private static var invalidatesOnOffTrack: Bool { RaceSettings.offTrackRule == .invalidate && !RaceSettings.resetToTrack }
+    private var offTrackStreak: Float = 0
+    private var lastOnTrackDistance: Float = 0
+    private var resetting = false
+    /// После возврата на трассу текущее касание игнорируется, пока палец не поднимут.
+    private var touchSuspended = false
+    private let fadeView = UIView()
     private var wasOffTrack = false
     private var bannerTimer: Float = 0
     private var hudTimer: Float = 0
@@ -76,6 +86,8 @@ final class GameController: NSObject {
     /// `-reverse` — демо-палец ведёт машину против хода трассы (проверка «не того направления»).
     /// `-wobble` — демо-палец «дрожит», чтобы проверить сглаживание следа.
     private let autopilotWobble = ProcessInfo.processInfo.arguments.contains("-wobble")
+    /// `-drift` — раз за круг демо-палец уводит машину на 16 м в сторону, на траву (проверка выездов).
+    private let autopilotDrift = ProcessInfo.processInfo.arguments.contains("-drift")
     private let autopilotDirection: Float = ProcessInfo.processInfo.arguments.contains("-reverse") ? -1 : 1
 
     // Камера: фиксированный изометрический ракурс, следует за машиной.
@@ -97,6 +109,8 @@ final class GameController: NSObject {
         let start = track.startPose
         follower = CarFollower(position: start.position, heading: start.heading)
         lapTimer = LapTimer(pointCount: track.points.count, startProgress: track.nearestIndex(start.position))
+        lapTimer.invalidatesOnOffTrack = GameController.invalidatesOnOffTrack
+        lastOnTrackDistance = track.nearestIndexDistance(start.position)
         if ProcessInfo.processInfo.arguments.contains("-resetRecords") { LapRecords.reset(definition.id) }
         ghost = Ghost.load(for: definition.id)
         bestSplits = LapRecords.bestSplits(definition.id)
@@ -156,6 +170,14 @@ final class GameController: NSObject {
         anchor.addChild(camera)
         audio.start()
 
+        // Затемнение при возврате на трассу: только сцена, HUD SwiftUI остаётся видимым поверх.
+        fadeView.backgroundColor = .black
+        fadeView.alpha = 0
+        fadeView.isUserInteractionEnabled = false
+        fadeView.frame = view.bounds
+        fadeView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(fadeView)
+
         let press = UILongPressGestureRecognizer(target: self, action: #selector(handleTouch(_:)))
         press.minimumPressDuration = 0
         press.allowableMovement = .greatestFiniteMagnitude
@@ -177,6 +199,13 @@ final class GameController: NSObject {
         follower = CarFollower(position: start.position, heading: start.heading)
         finger = nil
         lapTimer = LapTimer(pointCount: track.points.count, startProgress: track.nearestIndex(start.position))
+        lapTimer.invalidatesOnOffTrack = GameController.invalidatesOnOffTrack
+        lastOnTrackDistance = track.nearestIndexDistance(start.position)
+        offTrackStreak = 0
+        resetting = false
+        touchSuspended = false
+        fadeView.layer.removeAllAnimations()
+        fadeView.alpha = 0
         recording = Ghost()
         ghostCar?.root.isEnabled = false
         deltaTimer = 0
@@ -194,14 +223,18 @@ final class GameController: NSObject {
 
     @objc private func handleTouch(_ gesture: UILongPressGestureRecognizer) {
         let point = groundPoint(gesture.location(in: arView))
+        // Во время возврата на трассу касания не принимаются; после — нужно новое касание.
+        if resetting { finger = nil; return }
         switch gesture.state {
         case .began:
             guard let point else { return }
+            touchSuspended = false
             finger = point
             lastTouchLocation = gesture.location(in: arView)
             follower.touchBegan(at: point)
             state.hasTouched = true
         case .changed:
+            if touchSuspended { return }
             // Микродрожание неподвижного пальца не пересчитывает точку: иначе она «ехала» бы вместе с камерой.
             let location = gesture.location(in: arView)
             guard let point, hypot(location.x - lastTouchLocation.x, location.y - lastTouchLocation.y) >= 3 else { return }
@@ -209,6 +242,7 @@ final class GameController: NSObject {
             finger = point
         default:
             finger = nil
+            touchSuspended = false
         }
     }
 
@@ -235,6 +269,15 @@ final class GameController: NSObject {
         let offTrack = fromCenter > track.halfWidth + track.curbWidth + 0.3
         // На поребрике — когда колёса одной стороны на нём (центр машины ближе ~0.4 м к краю асфальта).
         let onCurb = !offTrack && fromCenter > track.halfWidth - 0.4
+        if offTrack {
+            offTrackStreak += dt
+        } else {
+            offTrackStreak = 0
+            lastOnTrackDistance = track.nearestIndexDistance(follower.position)
+        }
+        if resetToTrack && !resetting && offTrackStreak > Float(RaceSettings.resetDelay) {
+            beginResetToTrack()
+        }
         if offTrack != wasOffTrack {
             wasOffTrack = offTrack
             GameController.lapLog.debug("offTrack=\(offTrack) fromCenter=\(fromCenter) lapTime=\(self.lapTimer.lapTime)")
@@ -248,7 +291,8 @@ final class GameController: NSObject {
 
         updateCamera(dt: dt)
         updateMarkers()
-        updateLaps(dt: dt, offTrack: offTrack)
+        // Пока идёт возврат на трассу, выезд не копится в «срезку» — за него будет штраф.
+        updateLaps(dt: dt, offTrack: offTrack && !resetting)
         updateGhost(dt: dt)
 
         minimapTimer += dt
@@ -279,6 +323,7 @@ final class GameController: NSObject {
 
     /// Виртуальный палец едет по осевой линии с переменной скоростью (разгон → торможение до нуля → снова).
     private func driveAutopilot(dt: Float) {
+        if resetting { finger = nil; return }
         let t = Float(CACurrentMediaTime())
         let fingerSpeed = max(0, 60 * sin(t * 0.4))
         // Палец «отпускается», пока скорость в паузе, — как у игрока, который ведёт палец рывками.
@@ -297,6 +342,12 @@ final class GameController: NSObject {
             // Имитация дрожания руки: поперечная волна ~1 м с периодом ~6 м.
             let normal = SIMD2(frame.tangent.y, -frame.tangent.x)
             finger! += normal * (0.9 * sin(autopilotDistance * 1.05) + 0.4 * sin(autopilotDistance * 2.3))
+        }
+        if autopilotDrift {
+            let along = autopilotDistance - (autopilotDistance / track.length).rounded(.down) * track.length
+            if along > track.length * 0.3 && along < track.length * 0.3 + 60 {
+                finger! += SIMD2(frame.tangent.y, -frame.tangent.x) * 16
+            }
         }
     }
 
@@ -424,15 +475,49 @@ final class GameController: NSObject {
                         steer: 0, braking: false, dt: dt)
     }
 
+    /// Возврат на трассу: сцена затемняется, машина ставится на осевую линию там, где съехала,
+    /// стоя на месте и по направлению трассы; к кругу добавляется штраф.
+    private func beginResetToTrack() {
+        resetting = true
+        touchSuspended = true
+        finger = nil
+        UIView.animate(withDuration: 0.35, delay: 0, options: [.curveEaseIn], animations: {
+            self.fadeView.alpha = 1
+        }, completion: { _ in
+            guard self.resetting else { return }
+            self.respawnOnTrack()
+            UIView.animate(withDuration: 0.5, delay: 0.15, options: [.curveEaseOut], animations: {
+                self.fadeView.alpha = 0
+            }, completion: { _ in
+                self.resetting = false
+            })
+        })
+    }
+
+    private func respawnOnTrack() {
+        let frame = track.frame(atDistance: lastOnTrackDistance)
+        let heading = atan2(frame.tangent.x, frame.tangent.y)
+        follower = CarFollower(position: frame.position, heading: heading)
+        car?.update(position: frame.position, heading: heading, speed: 0, steer: 0, braking: false, dt: 0)
+        offTrackStreak = 0
+        lapTimer.forgiveCurrentExcursion()
+        lapTimer.addPenalty(RaceSettings.resetPenalty)
+        GameController.lapLog.info("respawn at distance=\(self.lastOnTrackDistance) lapTime=\(self.lapTimer.lapTime)")
+        showBanner(String(format: "Возврат на трассу · +%.0f с", RaceSettings.resetPenalty), good: false,
+                   icon: "arrow.uturn.backward.circle.fill")
+        snapCamera()
+    }
+
     private func showDelta(_ delta: Double, label: String) {
         state.delta = delta
         state.deltaLabel = label
         deltaTimer = 3
     }
 
-    private func showBanner(_ text: String, good: Bool) {
+    private func showBanner(_ text: String, good: Bool, icon: String? = nil) {
         state.banner = text
         state.bannerIsGood = good
+        state.bannerIcon = icon ?? (good ? "trophy.fill" : "xmark.octagon.fill")
         bannerTimer = 2.5
     }
 
