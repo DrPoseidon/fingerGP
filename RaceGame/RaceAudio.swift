@@ -9,7 +9,7 @@ import simd
 /// Игровой цикл раз в кадр вызывает `update(...)`; звуковой поток читает параметры и плавно к ним подтягивается.
 @MainActor
 final class RaceAudio {
-    enum Chime: Int { case lap = 1, record = 2 }
+    enum Chime: Int { case lap = 1, record = 2, countdown = 3, go = 4 }
 
     private let engine = AVAudioEngine()
     private var source: AVAudioSourceNode?
@@ -110,6 +110,7 @@ private final class Synth: @unchecked Sendable {
     private var chimeNoteCount = 0
     private var chimeSample = 0
     private var chimePhase: Float = 0
+    private var chimeNoteSeconds: Float = 0.11
 
     private func noise() -> Float {
         noiseSeed = noiseSeed &* 1_664_525 &+ 1_013_904_223
@@ -124,12 +125,17 @@ private final class Synth: @unchecked Sendable {
 
         if chimeRequest != seenChime {
             seenChime = chimeRequest
-            // Круг — две ноты вверх, рекорд — три.
-            chimeNotes = chimeKind == 2 ? (784, 988, 1319) : (659, 988, 0)
-            chimeNoteCount = chimeKind == 2 ? 3 : 2
+            // Круг — две ноты вверх, рекорд — три; погасший красный огонь — короткий писк, зелёный — длинный и выше.
+            switch chimeKind {
+            case 2: chimeNotes = (784, 988, 1319); chimeNoteCount = 3
+            case 3: chimeNotes = (880, 0, 0); chimeNoteCount = 1
+            case 4: chimeNotes = (1760, 0, 0); chimeNoteCount = 1
+            default: chimeNotes = (659, 988, 0); chimeNoteCount = 2
+            }
             chimeSample = 0
+            chimeNoteSeconds = chimeKind == 4 ? 0.6 : 0.11
         }
-        let noteLength = Int(0.11 * sr)
+        let noteLength = Int(chimeNoteSeconds * sr)
 
         for i in 0..<count {
             rpm += (targetRPM - rpm) * smooth

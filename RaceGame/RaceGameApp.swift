@@ -57,7 +57,7 @@ struct RootView: View {
 }
 
 extension Screen {
-    /// Для отладки: `-autopilot` сразу открывает гонку (по умолчанию — Монца, `-track spa|oval` — другая),
+    /// Для отладки: `-autopilot` или `-track <id>` сразу открывают гонку (по умолчанию — Монца),
     /// `-screen select` — экран выбора трассы.
     static var initial: Screen {
         let args = ProcessInfo.processInfo.arguments
@@ -65,7 +65,7 @@ extension Screen {
             if args[i + 1] == "select" { return .trackSelect }
             if args[i + 1] == "mode" { return .modeSelect }
         }
-        guard args.contains("-autopilot") else { return .menu }
+        guard args.contains("-autopilot") || args.contains("-track") else { return .menu }
         if let i = args.firstIndex(of: "-track"), i + 1 < args.count, let id = TrackID(rawValue: args[i + 1]) {
             return .race(id)
         }
@@ -168,6 +168,7 @@ struct RecordsPanel: View {
 struct SettingsView: View {
     @AppStorage(RaceSettings.offTrackRuleKey) private var offTrackRule = OffTrackRule.invalidate.rawValue
     @AppStorage(RaceSettings.resetToTrackKey) private var resetToTrack = false
+    @AppStorage(RaceSettings.rollingStartKey) private var rollingStart = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -200,6 +201,12 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            Toggle(isOn: $rollingStart) {
+                Text("Старт с хода")
+                    .font(.system(size: 17, weight: .bold))
+            }
+            .tint(Color(red: 0.86, green: 0.13, blue: 0.13))
             Spacer()
         }
         .padding(24)
@@ -524,7 +531,7 @@ struct HUDView: View {
                 .transition(.scale(scale: 0.8).combined(with: .opacity))
             }
             // Подсказка — в верхней части экрана: внизу стоит машина (камера смотрит вперёд) и мини-карта.
-            if !state.hasTouched {
+            if state.showHint && !state.hasTouched && (state.startLights == nil || state.startLights == .green) {
                 Text("Веди пальцем по трассе — машина поедет следом.\nБыстрее палец — быстрее машина.")
                     .multilineTextAlignment(.center)
                     .font(.system(size: 14, weight: .semibold))
@@ -536,8 +543,44 @@ struct HUDView: View {
             Spacer()
         }
         .padding()
+        .overlay {
+            ZStack {
+                if let lights = state.startLights {
+                    StartLightsView(lights: lights)
+                        .transition(.opacity)
+                }
+            }
+            .offset(y: -60)
+            .animation(.easeOut(duration: 0.3), value: state.startLights)
+            .allowsHitTesting(false)
+        }
         .animation(.easeOut(duration: 0.25), value: state.wrongWay)
         .animation(.easeOut(duration: 0.25), value: state.banner)
+    }
+}
+
+/// Стартовые огни: три красных гаснут по очереди, потом все три загораются зелёным.
+struct StartLightsView: View {
+    let lights: StartLights
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ForEach(0..<3, id: \.self) { i in
+                let color: Color? = switch lights {
+                case .green: Color(red: 0.2, green: 1, blue: 0.35)
+                case .red(let lit): i < lit ? Color(red: 1, green: 0.12, blue: 0.1) : nil
+                }
+                Circle()
+                    .fill(color ?? Color(white: 0.18))
+                    .overlay(Circle().stroke(.black.opacity(0.6), lineWidth: 3))
+                    .frame(width: 52, height: 52)
+                    .shadow(color: color?.opacity(0.9) ?? .clear, radius: 14)
+                    .animation(.easeOut(duration: 0.12), value: lights)
+            }
+        }
+        .padding(.horizontal, 18).padding(.vertical, 14)
+        .background(Color(white: 0.08).opacity(0.92), in: Capsule())
+        .shadow(color: .black.opacity(0.4), radius: 10, y: 4)
     }
 }
 

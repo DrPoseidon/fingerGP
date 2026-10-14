@@ -192,6 +192,11 @@ struct CarFollower {
         self.course = heading
     }
 
+    /// Сразу задать скорость — для старта с хода.
+    mutating func launch(speed: Float) {
+        self.speed = speed
+    }
+
     /// Новое касание начинает новый след.
     mutating func touchBegan(at p: SIMD2<Float>) {
         path = [p]

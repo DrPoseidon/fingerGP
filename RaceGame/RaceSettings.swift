@@ -21,6 +21,7 @@ enum OffTrackRule: String, CaseIterable, Identifiable {
 enum RaceSettings {
     static let offTrackRuleKey = "settings.offTrackRule"
     static let resetToTrackKey = "settings.resetToTrack"
+    static let rollingStartKey = "settings.rollingStart"
 
     /// Через сколько секунд за поребриком машина возвращается на трассу (раньше, чем круг аннулируется).
     static let resetDelay: Double = 0.5
@@ -33,5 +34,11 @@ enum RaceSettings {
 
     static var resetToTrack: Bool {
         UserDefaults.standard.bool(forKey: resetToTrackKey)
+    }
+
+    /// Старт с хода: машина разгоняется до линии старта под отсчёт 3-2-1. По умолчанию включён.
+    static var rollingStart: Bool {
+        let defaults = UserDefaults.standard
+        return defaults.object(forKey: rollingStartKey) == nil ? true : defaults.bool(forKey: rollingStartKey)
     }
 }

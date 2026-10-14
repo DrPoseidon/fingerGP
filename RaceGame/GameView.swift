@@ -80,6 +80,28 @@ final class GameController: NSObject {
     private let haptics = RaceHaptics()
     private var wrongWayTimer: Float = 0
 
+    /// Старт с хода (настройка): машина сама разгоняется по осевой к линии старта, пока гаснут три красных огня.
+    /// Огни привязаны к расстоянию до линии: за `greenDistance` метров (~3 с) загорается зелёный, и первое
+    /// касание забирает управление — есть время подхватить машину до линии. Время круга, как обычно, — с линии старта.
+    private struct RunUp {
+        /// Сколько красных огней ещё горит; `green` — загорелся зелёный, управление можно забрать.
+        var redLights = 3
+        var green = false
+        /// Где на осевой виртуальный палец (отрицательно — до линии старта) и с какой скоростью он едет.
+        var fingerDistance: Float
+        var fingerSpeed: Float
+        var launched = false
+    }
+    private var runUp: RunUp?
+    private var lightsTimer: Float = 0
+    private static let runUpDistance: Float = 340
+    /// Скорость на разгоне: в начале и крейсерская (~180 км/ч — средняя, не максимальная).
+    private static let runUpStartSpeed: Float = 35
+    private static let runUpCruiseSpeed: Float = 50
+    /// На каком расстоянии до линии гаснут красные огни (по очереди) и загорается зелёный — по ~0.9 с.
+    private static let redOffDistances: [Float] = [285, 240, 195]
+    private static let greenDistance: Float = 150
+
     /// Демо-режим для проверки без касаний: запуск с аргументом `-autopilot`.
     private let autopilot = ProcessInfo.processInfo.arguments.contains("-autopilot")
     private var autopilotDistance: Float = -14
@@ -106,7 +128,7 @@ final class GameController: NSObject {
     init(definition: TrackDefinition, state: GameState) {
         self.state = state
         track = Track(definition)
-        let start = track.startPose
+        let start = GameController.spawnPose(track)
         follower = CarFollower(position: start.position, heading: start.heading)
         lapTimer = LapTimer(pointCount: track.points.count, startProgress: track.nearestIndex(start.position))
         lapTimer.invalidatesOnOffTrack = GameController.invalidatesOnOffTrack
@@ -121,6 +143,23 @@ final class GameController: NSObject {
         let markerSize = definition.carScale / 1.5
         fingerMarker = ModelEntity(mesh: .generateCylinder(height: 0.05, radius: 1.3 * markerSize), materials: [markerMat])
         super.init()
+        prepareRunUp()
+    }
+
+    /// С разгоном — машина стоит за `runUpDistance` до линии (на коротких трассах ближе), иначе — сразу за линией.
+    private static func spawnPose(_ track: Track) -> (position: SIMD2<Float>, heading: Float) {
+        guard RaceSettings.rollingStart else { return track.startPose }
+        let f = track.frame(atDistance: -runUpDistance(track))
+        return (f.position, atan2(f.tangent.x, f.tangent.y))
+    }
+
+    /// На коротких трассах разгон короче — машина не должна стоять дальше середины круга от линии.
+    private static func runUpDistance(_ track: Track) -> Float { min(runUpDistance, track.length * 0.5) }
+
+    private func prepareRunUp() {
+        guard RaceSettings.rollingStart else { runUp = nil; return }
+        runUp = RunUp(fingerDistance: -GameController.runUpDistance(track), fingerSpeed: 0)
+        state.startLights = .red(3)
     }
 
     func makeView() -> ARView {
@@ -193,7 +232,7 @@ final class GameController: NSObject {
     func restartIfNeeded(token: Int) {
         guard token != restartToken else { return }
         restartToken = token
-        let start = track.startPose
+        let start = GameController.spawnPose(track)
         follower = CarFollower(position: start.position, heading: start.heading)
         finger = nil
         lapTimer = LapTimer(pointCount: track.points.count, startProgress: track.nearestIndex(start.position))
@@ -214,6 +253,8 @@ final class GameController: NSObject {
         wrongWayTimer = 0
         state.carPosition = follower.position
         state.isLoading = car == nil
+        lightsTimer = 0
+        prepareRunUp()
         snapCamera()
     }
 
@@ -223,14 +264,21 @@ final class GameController: NSObject {
         let point = groundPoint(gesture.location(in: arView))
         // Во время возврата на трассу касания не принимаются; после — нужно новое касание.
         if resetting { finger = nil; return }
-        switch gesture.state {
+        // Во время отсчёта машина едет сама; после «Старт!» первое касание забирает управление.
+        var phase = gesture.state
+        if let runUp {
+            guard runUp.green, phase == .began || phase == .changed else { return }
+            self.runUp = nil
+            phase = .began
+        }
+        switch phase {
         case .began:
             guard let point else { return }
             touchSuspended = false
             finger = point
             lastTouchLocation = gesture.location(in: arView)
             follower.touchBegan(at: point)
-            state.hasTouched = true
+            state.markTouched()
         case .changed:
             if touchSuspended { return }
             // Микродрожание неподвижного пальца не пересчитывает точку: иначе она «ехала» бы вместе с камерой.
@@ -260,7 +308,11 @@ final class GameController: NSObject {
             configureCamera(for: arView.bounds.size)
         }
 
-        if autopilot { driveAutopilot(dt: dt) }
+        if runUp != nil {
+            driveRunUp(dt: dt)
+        } else if autopilot {
+            driveAutopilot(dt: dt)
+        }
 
         // Поребрик — часть трассы: скорость теряется, только когда машина целиком за ним.
         let fromCenter = track.distanceFromCenterline(follower.position)
@@ -317,6 +369,75 @@ final class GameController: NSObject {
             bannerTimer -= dt
             if bannerTimer <= 0 { state.banner = nil }
         }
+        if lightsTimer > 0 {
+            lightsTimer -= dt
+            if lightsTimer <= 0 { state.startLights = nil }
+        }
+    }
+
+    /// Разгон к линии старта: виртуальный палец едет по осевой впереди машины с крейсерской скоростью,
+    /// медленнее — если впереди поворот. Разгон начинается, когда машина загружена.
+    private func driveRunUp(dt: Float) {
+        guard var r = runUp, car != nil else { return }
+        if !r.launched {
+            r.launched = true
+            let speed = min(GameController.runUpStartSpeed, safeSpeed(atDistance: r.fingerDistance))
+            follower.launch(speed: speed)
+            r.fingerSpeed = speed
+            r.fingerDistance += 6 + speed * 0.4
+            finger = track.frame(atDistance: r.fingerDistance).position
+            follower.touchBegan(at: finger!)
+        }
+
+        // Огни: сколько метров машине до линии старта (до линии — положительно).
+        let here = track.nearestIndexDistance(follower.position)
+        let toLine = here > track.length / 2 ? track.length - here : -here
+        if !r.green {
+            let lit = GameController.redOffDistances.filter { toLine <= $0 }.count
+            let red = 3 - lit
+            if toLine <= GameController.greenDistance {
+                r.green = true
+                state.startLights = .green
+                audio.play(.go)
+                haptics.countdown(go: true)
+                lightsTimer = 1.2
+            } else if red < r.redLights {
+                r.redLights = red
+                state.startLights = .red(red)
+                audio.play(.countdown)
+                haptics.countdown(go: false)
+            }
+        }
+
+        r.fingerSpeed = min(r.fingerSpeed + 15 * dt, GameController.runUpCruiseSpeed,
+                            safeSpeed(atDistance: r.fingerDistance))
+        r.fingerDistance += r.fingerSpeed * dt
+        finger = track.frame(atDistance: r.fingerDistance).position
+        runUp = r
+
+        // Демо-палец забирает управление на зелёный. Игрок так и не коснулся экрана — машину
+        // отпускают, как только погаснут зелёные огни.
+        if r.green && (autopilot || lightsTimer <= 0) {
+            runUp = nil
+            finger = nil
+        }
+    }
+
+    /// Скорость, с которой виртуальный палец успеет оттормозиться перед поворотами на ближайших 250 м.
+    private func safeSpeed(atDistance s: Float) -> Float {
+        var limit = follower.maxSpeed
+        var d: Float = 0
+        while d < 250 {
+            let a = track.frame(atDistance: s + d - 2.5).tangent
+            let b = track.frame(atDistance: s + d + 2.5).tangent
+            let curvature = abs(atan2(a.x * b.y - a.y * b.x, simd_dot(a, b))) / 5
+            if curvature > 1e-4 {
+                let corner = (0.8 * follower.grip / curvature).squareRoot()
+                limit = min(limit, (corner * corner + follower.brakeDecel * d).squareRoot())
+            }
+            d += 5
+        }
+        return limit
     }
 
     /// Виртуальный палец едет по осевой линии с переменной скоростью (разгон → торможение до нуля → снова).
@@ -331,7 +452,7 @@ final class GameController: NSObject {
             autopilotDistance = autopilotDirection > 0 ? max(autopilotDistance, here + 6) : here - 6
             finger = track.frame(atDistance: autopilotDistance).position
             follower.touchBegan(at: finger!)
-            state.hasTouched = true
+            state.markTouched()
         }
         autopilotDistance += fingerSpeed * autopilotDirection * dt
         let frame = track.frame(atDistance: autopilotDistance)
@@ -426,6 +547,7 @@ final class GameController: NSObject {
             case .sector(let index, let time):
                 if lapTimer.isValid, let best = bestSplits, index < best.count {
                     showDelta(time - best[index], label: "S\(index + 1)")
+                    haptics.sector()
                 }
             case .invalidated:
                 state.lapInvalid = true
