@@ -1,6 +1,7 @@
 import SwiftUI
 import RealityKit
 import Combine
+import os
 
 /// Общие настройки сцены для гонки и фона меню.
 @MainActor
@@ -53,10 +54,15 @@ final class GameController: NSObject {
 
     private var finger: SIMD2<Float>?
     private var lastTouchLocation: CGPoint = .zero
-    private var prevProgress = 0
-    private var lapStarted = false
-    private var passedHalfway = false
-    private var lapTime: Double = 0
+    private var lapTimer: LapTimer
+    /// Лучший круг для призрака, его сектора и запись текущего круга.
+    private var ghost: Ghost?
+    private var bestSplits: [Double]?
+    private var recording = Ghost()
+    private var ghostCar: CarEntity?
+    private var deltaTimer: Float = 0
+    private var wasOffTrack = false
+    private var bannerTimer: Float = 0
     private var hudTimer: Float = 0
     private var minimapTimer: Float = 0
     private var throttle: Float = 0
@@ -90,7 +96,10 @@ final class GameController: NSObject {
         track = Track(definition)
         let start = track.startPose
         follower = CarFollower(position: start.position, heading: start.heading)
-        prevProgress = track.nearestIndex(start.position)
+        lapTimer = LapTimer(pointCount: track.points.count, startProgress: track.nearestIndex(start.position))
+        if ProcessInfo.processInfo.arguments.contains("-resetRecords") { LapRecords.reset(definition.id) }
+        ghost = Ghost.load(for: definition.id)
+        bestSplits = LapRecords.bestSplits(definition.id)
         state.carPosition = start.position
 
         var markerMat = UnlitMaterial(color: .white)
@@ -118,6 +127,13 @@ final class GameController: NSObject {
                 anchor.addChild(car.root)
                 car.update(position: self.follower.position, heading: self.follower.heading,
                            speed: 0, steer: 0, braking: false, dt: 0)
+
+                // Призрак лучшего круга — та же модель, полупрозрачная.
+                let ghostCar = try await CarEntity.load(scale: carScale)
+                ghostCar.root.components.set(OpacityComponent(opacity: 0.35))
+                ghostCar.root.isEnabled = false
+                anchor.addChild(ghostCar.root)
+                self.ghostCar = ghostCar
             } catch {
                 print("Не удалось загрузить race_car.usdz: \(error)")
             }
@@ -160,10 +176,11 @@ final class GameController: NSObject {
         let start = track.startPose
         follower = CarFollower(position: start.position, heading: start.heading)
         finger = nil
-        prevProgress = track.nearestIndex(start.position)
-        lapStarted = false
-        passedHalfway = false
-        lapTime = 0
+        lapTimer = LapTimer(pointCount: track.points.count, startProgress: track.nearestIndex(start.position))
+        recording = Ghost()
+        ghostCar?.root.isEnabled = false
+        deltaTimer = 0
+        bannerTimer = 0
         autopilotDistance = -14
         car?.update(position: follower.position, heading: follower.heading, speed: 0, steer: 0, braking: false, dt: 0)
         state.reset()
@@ -218,6 +235,10 @@ final class GameController: NSObject {
         let offTrack = fromCenter > track.halfWidth + track.curbWidth + 0.3
         // На поребрике — когда колёса одной стороны на нём (центр машины ближе ~0.4 м к краю асфальта).
         let onCurb = !offTrack && fromCenter > track.halfWidth - 0.4
+        if offTrack != wasOffTrack {
+            wasOffTrack = offTrack
+            GameController.lapLog.debug("offTrack=\(offTrack) fromCenter=\(fromCenter) lapTime=\(self.lapTimer.lapTime)")
+        }
         let oldSpeed = follower.speed
         follower.step(dt: dt, finger: finger, offTrack: offTrack)
         car?.update(position: follower.position, heading: follower.heading, speed: follower.speed,
@@ -227,21 +248,32 @@ final class GameController: NSObject {
 
         updateCamera(dt: dt)
         updateMarkers()
-        updateLaps(dt: dt)
+        updateLaps(dt: dt, offTrack: offTrack)
+        updateGhost(dt: dt)
 
         minimapTimer += dt
         if minimapTimer >= 1.0 / 30 {
             minimapTimer = 0
             state.carPosition = follower.position
             state.cameraYaw = cameraYaw
+            state.ghostPosition = ghostCar?.root.isEnabled == true
+                ? SIMD2(ghostCar!.root.position.x, ghostCar!.root.position.z) : nil
         }
 
         hudTimer += dt
         if hudTimer >= 0.1 {
             hudTimer = 0
             state.speedKmh = Int((follower.speed * 3.6).rounded())
-            state.currentLapTime = lapTime
+            state.currentLapTime = lapTimer.lapTime
             state.offTrack = offTrack && follower.speed > 0.5
+        }
+        if deltaTimer > 0 {
+            deltaTimer -= dt
+            if deltaTimer <= 0 { state.delta = nil }
+        }
+        if bannerTimer > 0 {
+            bannerTimer -= dt
+            if bannerTimer <= 0 { state.banner = nil }
         }
     }
 
@@ -326,35 +358,82 @@ final class GameController: NSObject {
         }
     }
 
-    /// Прогресс — индекс ближайшей точки осевой линии (0 — линия старта).
-    /// Круг засчитывается при пересечении старта по направлению гонки, если машина побывала на середине круга.
-    private func updateLaps(dt: Float) {
-        if lapStarted { lapTime += Double(dt) }
-        let n = track.points.count
-        let progress = track.nearestIndex(follower.position)
-        defer { prevProgress = progress }
-
-        if progress > n * 2 / 5 && progress < n * 3 / 5 { passedHalfway = true }
-
-        let crossedForward = prevProgress > n * 3 / 4 && progress < n / 4
-        let crossedBackward = prevProgress < n / 4 && progress > n * 3 / 4
-        if crossedForward {
-            if !lapStarted {
-                lapStarted = true
-                lapTime = 0
-            } else if passedHalfway {
-                state.laps += 1
-                state.bestLap = min(state.bestLap ?? .infinity, lapTime)
-                let hadRecord = LapRecords.bestLap(track.definition.id) != nil
-                let record = LapRecords.recordLap(track.definition.id, time: lapTime) && hadRecord
-                audio.play(record ? .record : .lap)
-                haptics.lap(record: record)
-                lapTime = 0
+    /// Зачёт круга, сектора и запись круга для призрака.
+    private func updateLaps(dt: Float, offTrack: Bool) {
+        let events = lapTimer.update(progress: track.nearestIndex(follower.position), offTrack: offTrack, dt: Double(dt))
+        if lapTimer.isRunning {
+            // Запись положения 20 раз в секунду (по времени круга).
+            while Double(recording.samples.count) * Ghost.interval <= lapTimer.lapTime {
+                recording.samples.append(SIMD4(follower.position.x, follower.position.y, follower.heading, follower.speed))
             }
-            passedHalfway = false
-        } else if crossedBackward {
-            passedHalfway = false
         }
+
+        for event in events {
+            GameController.lapLog.info("\(String(describing: event), privacy: .public) lapTime=\(self.lapTimer.lapTime) offTrack=\(offTrack) fromCenter=\(self.track.distanceFromCenterline(self.follower.position))")
+            switch event {
+            case .lapStarted:
+                recording = Ghost()
+                state.lapInvalid = false
+            case .sector(let index, let time):
+                if lapTimer.isValid, let best = bestSplits, index < best.count {
+                    showDelta(time - best[index], label: "S\(index + 1)")
+                }
+            case .invalidated:
+                state.lapInvalid = true
+                haptics.wrongWay()
+            case .lapFinished(let time, let splits, let valid):
+                if valid {
+                    finishLap(time: time, splits: splits)
+                } else {
+                    showBanner("Круг не засчитан", good: false)
+                }
+            }
+        }
+    }
+
+    private static let lapLog = Logger(subsystem: "com.example.RaceGame", category: "laps")
+
+    private func finishLap(time: Double, splits: [Double]) {
+        let id = track.definition.id
+        let previousBest = LapRecords.bestLap(id)
+        state.laps += 1
+        state.bestLap = min(state.bestLap ?? .infinity, time)
+        if let previousBest { showDelta(time - previousBest, label: "Круг") }
+
+        let isRecord = LapRecords.recordLap(id, time: time, splits: splits, ghost: recording)
+        if isRecord {
+            ghost = recording
+            bestSplits = splits
+        }
+        // Первый круг на трассе — просто круг; рекорд — когда побит прежний.
+        let celebrate = isRecord && previousBest != nil
+        if celebrate { showBanner("Новый рекорд!", good: true) }
+        audio.play(celebrate ? .record : .lap)
+        haptics.lap(record: celebrate)
+    }
+
+    /// Призрак повторяет лучший круг синхронно с текущим: в одно и то же время от старта круга.
+    private func updateGhost(dt: Float) {
+        guard let ghostCar else { return }
+        guard lapTimer.isRunning, let pose = ghost?.pose(at: lapTimer.lapTime) else {
+            ghostCar.root.isEnabled = false
+            return
+        }
+        ghostCar.root.isEnabled = true
+        ghostCar.update(position: pose.position, heading: pose.heading, speed: pose.speed,
+                        steer: 0, braking: false, dt: dt)
+    }
+
+    private func showDelta(_ delta: Double, label: String) {
+        state.delta = delta
+        state.deltaLabel = label
+        deltaTimer = 3
+    }
+
+    private func showBanner(_ text: String, good: Bool) {
+        state.banner = text
+        state.bannerIsGood = good
+        bannerTimer = 2.5
     }
 
     /// Дистанция камеры подбирается так, чтобы по короткой стороне экрана было видно `visibleWidth` метров.

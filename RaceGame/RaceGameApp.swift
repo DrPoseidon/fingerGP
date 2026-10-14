@@ -413,6 +413,17 @@ struct HUDView: View {
                         .font(.system(size: 14, weight: .semibold))
                     Text(formatLapTime(state.currentLapTime))
                         .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                    if state.lapInvalid {
+                        Text("КРУГ НЕ ЗАСЧИТАН")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(.orange)
+                    } else if let delta = state.delta {
+                        // Минус — быстрее лучшего круга (зелёный), плюс — медленнее (красный).
+                        Text("\(state.deltaLabel)  \(formatDelta(delta))")
+                            .font(.system(size: 18, weight: .heavy, design: .monospaced))
+                            .foregroundStyle(delta < 0 ? Color(red: 0.3, green: 0.95, blue: 0.4)
+                                             : delta > 0 ? Color(red: 1, green: 0.35, blue: 0.3) : .white)
+                    }
                     if let best = state.bestLap {
                         Text("Лучший: \(formatLapTime(best))")
                             .font(.system(size: 13, weight: .medium, design: .monospaced))
@@ -442,6 +453,21 @@ struct HUDView: View {
                 .padding(.top, 24)
                 .transition(.scale(scale: 0.8).combined(with: .opacity))
             }
+            if let banner = state.banner {
+                HStack(spacing: 10) {
+                    Image(systemName: state.bannerIsGood ? "trophy.fill" : "xmark.octagon.fill")
+                        .font(.system(size: 20, weight: .heavy))
+                    Text(banner.uppercased())
+                        .font(.system(size: 20, weight: .black, design: .rounded))
+                }
+                .foregroundStyle(state.bannerIsGood ? .black : .white)
+                .padding(.horizontal, 20).padding(.vertical, 12)
+                .background(state.bannerIsGood ? Color(red: 1, green: 0.8, blue: 0.2) : Color(white: 0.2).opacity(0.9),
+                            in: Capsule())
+                .shadow(color: .black.opacity(0.3), radius: 8, y: 3)
+                .padding(.top, 12)
+                .transition(.scale(scale: 0.8).combined(with: .opacity))
+            }
             // Подсказка — в верхней части экрана: внизу стоит машина (камера смотрит вперёд) и мини-карта.
             if !state.hasTouched {
                 Text("Веди пальцем по трассе — машина поедет следом.\nБыстрее палец — быстрее машина.")
@@ -456,6 +482,7 @@ struct HUDView: View {
         }
         .padding()
         .animation(.easeOut(duration: 0.25), value: state.wrongWay)
+        .animation(.easeOut(duration: 0.25), value: state.banner)
     }
 }
 
@@ -520,6 +547,13 @@ struct MinimapView: View {
 
             let start = map.project(map.start, yaw: yaw, in: rect)
             context.fill(Path(ellipseIn: CGRect(x: start.x - 3, y: start.y - 3, width: 6, height: 6)), with: .color(.black))
+
+            // Призрак лучшего круга — полупрозрачная белая точка.
+            if let ghost = state.ghostPosition {
+                let g = map.project(ghost, yaw: yaw, in: rect)
+                context.fill(Path(ellipseIn: CGRect(x: g.x - 5, y: g.y - 5, width: 10, height: 10)),
+                             with: .color(.white.opacity(0.55)))
+            }
 
             let dot = map.project(car, yaw: yaw, in: rect)
             context.fill(Path(ellipseIn: CGRect(x: dot.x - 7, y: dot.y - 7, width: 14, height: 14)), with: .color(.white))
