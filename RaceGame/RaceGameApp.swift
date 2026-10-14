@@ -550,6 +550,8 @@ struct Minimap {
 
     let points: [SIMD2<Float>]
     let start: SIMD2<Float>
+    /// Границы секторов (те же отсечки, что в LapTimer): точка на осевой и направление трассы.
+    let sectorMarks: [(point: SIMD2<Float>, tangent: SIMD2<Float>)]
     private let center: SIMD2<Float>
     private let radius: Float
 
@@ -566,6 +568,11 @@ struct Minimap {
         let pts = stride(from: 0, to: track.points.count, by: 3).map { track.points[$0] }
         points = pts
         start = track.points[0]
+        let n = track.points.count
+        sectorMarks = (1..<LapTimer.sectorCount).map { k in
+            let i = n * k / LapTimer.sectorCount
+            return (track.points[i], track.tangents[i])
+        }
         let lo = pts.reduce(pts[0]) { simd_min($0, $1) }, hi = pts.reduce(pts[0]) { simd_max($0, $1) }
         center = (lo + hi) / 2
         radius = pts.map { simd_distance($0, (lo + hi) / 2) }.max()!
@@ -598,6 +605,20 @@ struct MinimapView: View {
             }
             context.stroke(path, with: .color(.white.opacity(0.9)),
                            style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+
+            // Границы секторов — жёлтые штрихи поперёк трассы.
+            for mark in map.sectorMarks {
+                let p = map.project(mark.point, yaw: yaw, in: rect)
+                let ahead = map.project(mark.point + mark.tangent * 20, yaw: yaw, in: rect)
+                let dx = ahead.x - p.x, dy = ahead.y - p.y
+                let len = max(hypot(dx, dy), 0.001)
+                let nx = -dy / len * 7, ny = dx / len * 7
+                var tick = Path()
+                tick.move(to: CGPoint(x: p.x - nx, y: p.y - ny))
+                tick.addLine(to: CGPoint(x: p.x + nx, y: p.y + ny))
+                context.stroke(tick, with: .color(Color(red: 1, green: 0.82, blue: 0.2)),
+                               style: StrokeStyle(lineWidth: 3, lineCap: .round))
+            }
 
             let start = map.project(map.start, yaw: yaw, in: rect)
             context.fill(Path(ellipseIn: CGRect(x: start.x - 3, y: start.y - 3, width: 6, height: 6)), with: .color(.black))
