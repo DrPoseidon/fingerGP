@@ -98,7 +98,7 @@ extension Track {
 
     private func addBoards(_ builder: SceneryBuilder, curvature: [Float]) {
         let s = propScale
-        let width = 12 * s, height = 4 * s, legs = 2.6 * s
+        let width = 15 * s, height = 5 * s, legs = 2.8 * s
         let n = points.count
         var index = 0
         var side: Float = 1
@@ -145,7 +145,7 @@ extension Track {
 
     private func addGroundLogos(_ builder: SceneryBuilder, curvature: [Float]) {
         let s = propScale
-        let width = 15 * s, depth = 5 * s
+        let width = 19 * s, depth = 6.3 * s
         let n = points.count
         var index = 0
         var i = 0
