@@ -17,7 +17,10 @@ enum SceneSetup {
     static func makeSun() -> DirectionalLight {
         let sun = DirectionalLight()
         sun.light.intensity = 4000
-        sun.shadow = DirectionalLightComponent.Shadow(maximumDistance: 200, depthBias: 3)
+        var shadow = DirectionalLightComponent.Shadow()
+        shadow.shadowProjection = .automatic(maximumDistance: 200)
+        shadow.depthBias = 3
+        sun.shadow = shadow
         sun.look(at: .zero, from: [-30, 60, 25], relativeTo: nil)
         return sun
     }

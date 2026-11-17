@@ -85,7 +85,8 @@ final class MedalStore {
                     if let run = MedalStore.simulate(track, profile: profile, skill: medal.skill) { result[medal] = run }
                 }
                 all[definition.id] = result
-                await MainActor.run { MedalStore.shared.runs[definition.id] = result }
+                let finished = result
+                await MainActor.run { MedalStore.shared.runs[definition.id] = finished }
             }
             MedalStore.saveCache(all)
         }

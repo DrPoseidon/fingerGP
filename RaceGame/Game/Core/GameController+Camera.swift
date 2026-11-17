@@ -13,7 +13,7 @@ extension GameController {
         let tanV = tan(cameraFov * .pi / 180 / 2)
         let visibleHeight = aspect < 1 ? visibleWidth / aspect : visibleWidth
         cameraDistance = visibleHeight * sin(cameraElevation) / (2 * tanV)
-        sun.shadow?.maximumDistance = cameraDistance + 120
+        sun.shadow?.shadowProjection = .automatic(maximumDistance: cameraDistance + 120)
         snapCamera()
     }
 
