@@ -10,17 +10,20 @@ enum SceneryTheme {
     var groundColor: UIColor {
         switch self {
         case .city: UIColor(red: 0.62, green: 0.61, blue: 0.58, alpha: 1)
+        case .mountains: UIColor(red: 0.44, green: 0.6, blue: 0.32, alpha: 1)  // альпийский луг
         default: UIColor(red: 0.36, green: 0.62, blue: 0.30, alpha: 1)
         }
     }
 
-    /// Сколько квадратных метров на одно дерево, предел числа деревьев и доля елей.
-    var trees: (areaPerTree: Float, limit: Int, conifers: Float) {
+    /// Сколько квадратных метров на одно дерево, предел числа деревьев, доля елей
+    /// насколько деревья собираются в рощи (0 — ровно по всей площади, 1 — рощи и поляны)
+    /// и сколько ещё деревьев посадить в полосе вдоль трассы — там, куда смотрит камера во время гонки.
+    var trees: (areaPerTree: Float, limit: Int, conifers: Float, groves: Float, alongTrack: Int) {
         switch self {
-        case .stadium: (2600, 350, 0.3)
-        case .city: (1, 0, 0)  // в городе деревья только в скверах
-        case .mountains: (1500, 700, 0.9)
-        case .forest: (1000, 1000, 0.55)
+        case .stadium: (2600, 350, 0.3, 0, 0)
+        case .city: (1, 0, 0, 0, 0)  // в городе деревья только в скверах
+        case .mountains: (900, 1400, 0.9, 0.7, 1200)
+        case .forest: (700, 2000, 0.55, 0.75, 9000)
         }
     }
 }
@@ -46,12 +49,40 @@ extension Track {
             let conifer = rng.next(in: 0...1) < settings.conifers
             let shade = rng.next(in: 0...1) < 0.4
             let phase = rng.next(in: 0...(2 * .pi))
+            guard rng.next(in: 0...1) < density(p, groves: settings.groves) else { continue }
             // Не ставим деревья на трассу, в зону сразу за ней и поверх щитов.
             guard approximateDistance(p) > halfWidth + curbWidth + 5 * sizeScale,
                   builder.isFree(p, radius: 2 * scale) else { continue }
             addTree(builder, at: p, scale: scale, conifer: conifer, shade: shade, phase: phase)
             placed += 1
         }
+
+        // Полоса вдоль трассы: точка трассы, сторона и отступ от поребрика до ~90 м.
+        placed = 0
+        attempts = 0
+        while placed < settings.alongTrack && attempts < settings.alongTrack * 6 {
+            attempts += 1
+            let i = Int(rng.next(in: 0...0.9999) * Float(points.count))
+            let side: Float = rng.next(in: -1...1) < 0 ? -1 : 1
+            let offset = halfWidth + curbWidth + rng.next(in: 4...68) * sizeScale
+            let p = points[i] + normals[i] * side * offset
+            let scale = rng.next(in: 0.8...1.35) * sizeScale
+            let conifer = rng.next(in: 0...1) < settings.conifers
+            let shade = rng.next(in: 0...1) < 0.4
+            let phase = rng.next(in: 0...(2 * .pi))
+            guard rng.next(in: 0...1) < density(p, groves: settings.groves),
+                  approximateDistance(p) > halfWidth + curbWidth + 4 * sizeScale,
+                  builder.isFree(p, radius: 1.6 * scale) else { continue }
+            addTree(builder, at: p, scale: scale, conifer: conifer, shade: shade, phase: phase)
+            placed += 1
+        }
+    }
+
+    /// Плавно меняющаяся по карте густота (0…1): там, где она мала, — поляны, где велика — роща.
+    private func density(_ p: SIMD2<Float>, groves: Float) -> Float {
+        let wave = sin(p.x / 83 + 1.3) * cos(p.y / 107) + 0.6 * sin((p.x + p.y) / 151 + 0.4) + 0.4 * cos((p.x - p.y) / 61)
+        let dense = simd_clamp(0.5 + wave * 0.45, 0, 1)
+        return 1 - groves + groves * dense * dense
     }
 
     /// Дерево: ель (два конуса) или лиственное (ствол и «облако»), в двух оттенках зелени.

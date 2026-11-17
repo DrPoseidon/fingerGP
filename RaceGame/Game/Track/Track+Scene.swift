@@ -61,7 +61,12 @@ extension Track {
 
         let scenery = SceneryBuilder()
         addTrackside(scenery)
-        if definition.scenery == .city { addCity(scenery) }
+        switch definition.scenery {
+        case .city: addCity(scenery)
+        case .mountains: addMountains(scenery)
+        case .forest: addForestFloor(scenery)
+        case .stadium: break
+        }
         addTrees(scenery)
         scenery.build(into: root)
         return root
