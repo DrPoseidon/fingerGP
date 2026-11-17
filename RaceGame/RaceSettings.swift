@@ -22,6 +22,8 @@ enum RaceSettings {
     static let offTrackRuleKey = "settings.offTrackRule"
     static let resetToTrackKey = "settings.resetToTrack"
     static let rollingStartKey = "settings.rollingStart"
+    static let showFPSKey = "settings.showFPS"
+    static let collisionsKey = "settings.collisions"
 
     /// Через сколько секунд за поребриком машина возвращается на трассу (раньше, чем круг аннулируется).
     static let resetDelay: Double = 0.5
@@ -34,6 +36,16 @@ enum RaceSettings {
 
     static var resetToTrack: Bool {
         UserDefaults.standard.bool(forKey: resetToTrackKey)
+    }
+
+    /// Столкновения с соперниками в гонке. По умолчанию выключены: машины проходят друг сквозь друга.
+    static var collisions: Bool {
+        UserDefaults.standard.bool(forKey: collisionsKey)
+    }
+
+    /// Счётчик кадров и статистика RealityKit поверх сцены (для проверки производительности).
+    static var showFPS: Bool {
+        UserDefaults.standard.bool(forKey: showFPSKey)
     }
 
     /// Старт с хода: машина разгоняется до линии старта под отсчёт 3-2-1. По умолчанию включён.

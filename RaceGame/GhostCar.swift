@@ -10,8 +10,9 @@ import UIKit
 final class GhostCar {
     let root = Entity()
 
-    init(scale: Float) {
-        var material = UnlitMaterial(color: UIColor(red: 0.72, green: 0.9, blue: 1, alpha: 1))
+    /// `color` — голубой у призрака своего рекорда, цвет медали у призрака-цели.
+    init(scale: Float, color: UIColor = UIColor(red: 0.72, green: 0.9, blue: 1, alpha: 1)) {
+        var material = UnlitMaterial(color: color)
         material.blending = .transparent(opacity: 0.45)
 
         // Координаты модели: метры, нос в +Z, y вверх (см. CAR_MODEL_GUIDE.md).

@@ -11,6 +11,10 @@ final class CarEntity {
     private let brakeOn: Entity?
     private let exhaust = Entity()
     private let tyreSmoke: [Entity]
+    private let wind = Entity()
+    private var windLines: [(entity: Entity, phase: Float)] = []
+    private var windTime: Float = 0
+    private var opacity: Float = 1
     private var wheelAngle: Float = 0
     private let tyreRadius: Float = 0.43
     /// Визуальный масштаб: модель в реальных метрах мелковата на экране телефона.
@@ -20,17 +24,39 @@ final class CarEntity {
     @MainActor private static var templateTask: Task<Entity, Error>?
 
     /// Модель грузится асинхронно один раз, дальше — клонируется.
+    /// `livery` — цвет вместо красного (кузов, понтоны, шлем) — для машин соперников.
     @MainActor
-    static func load(scale: Float) async throws -> CarEntity {
+    static func load(scale: Float, livery: UIColor? = nil) async throws -> CarEntity {
         let task = templateTask ?? Task { try await Entity(named: "race_car") }
         templateTask = task
         do {
             let template = try await task.value
-            return CarEntity(model: template.clone(recursive: true), scale: scale)
+            let model = template.clone(recursive: true)
+            if let livery { recolor(model, to: livery) }
+            return CarEntity(model: model, scale: scale)
         } catch {
             templateTask = nil
             throw error
         }
+    }
+
+    /// Заменить красный материал ливреи на другой цвет (материалы у клона свои, шаблон не меняется).
+    @MainActor
+    private static func recolor(_ entity: Entity, to color: UIColor) {
+        if var model = entity.components[ModelComponent.self] {
+            var changed = false
+            model.materials = model.materials.map { material in
+                guard var pbr = material as? PhysicallyBasedMaterial else { return material }
+                // Цвет из USD — в линейном RGB, getRed для него не срабатывает: компоненты читаются напрямую.
+                guard let c = pbr.baseColor.tint.cgColor.components, c.count >= 3,
+                      c[0] > 0.45, c[1] < 0.3, c[2] < 0.3 else { return material }
+                pbr.baseColor.tint = color
+                changed = true
+                return pbr
+            }
+            if changed { entity.components.set(model) }
+        }
+        for child in entity.children { recolor(child, to: color) }
     }
 
     private init(model: Entity, scale: Float) {
@@ -53,6 +79,53 @@ final class CarEntity {
             return e
         }
         for e in tyreSmoke { root.addChild(e) }
+        wind.isEnabled = false
+        root.addChild(wind)
+        windLines = CarEntity.makeWindLines(in: wind)
+    }
+
+    /// Слипстрим: тонкие белые линии проносятся вдоль машины назад — струи воздуха.
+    /// Простые неосвещаемые меши; прозрачность — общая, на родителе, так дёшево.
+    private static func makeWindLines(in parent: Entity) -> [(entity: Entity, phase: Float)] {
+        var material = UnlitMaterial(color: UIColor(red: 0.92, green: 0.98, blue: 1, alpha: 1))
+        material.blending = .transparent(opacity: 0.8)
+        let mesh = MeshResource.generateBox(width: 0.07, height: 0.02, depth: 2.6)
+        // Линии по бокам машины и над ней, на разной высоте и со сдвигом по фазе.
+        let slots: [(x: Float, y: Float)] = [(-1.6, 0.5), (-1.9, 0.9), (-1.3, 1.2), (1.6, 0.5), (1.9, 0.9), (1.3, 1.2), (-0.5, 1.5), (0.5, 1.4)]
+        return slots.enumerated().map { i, slot in
+            let line = ModelEntity(mesh: mesh, materials: [material])
+            line.position = [slot.x, slot.y, 0]
+            parent.addChild(line)
+            return (line, Float(i) * 0.37)
+        }
+    }
+
+    /// Сила слипстрима 0…1: линии видны и бегут назад, сильнее — ярче.
+    func updateWind(draft: Float, dt: Float) {
+        guard draft > 0.05 else {
+            if wind.isEnabled { wind.isEnabled = false }
+            return
+        }
+        wind.isEnabled = true
+        wind.components.set(OpacityComponent(opacity: min(0.25 + draft, 1)))
+        // Линия пролетает от носа (z = 3) к хвосту (z = −4) за ~0.35 с и появляется снова.
+        windTime += dt / 0.35
+        for (entity, phase) in windLines {
+            let k = (windTime + phase).truncatingRemainder(dividingBy: 1)
+            entity.position.z = 3 - 7 * k
+        }
+    }
+
+    /// Полупрозрачность (соперник, сквозь которого проезжает игрок). 1 — обычная машина.
+    /// Прозрачность дорогая (124 детали в прозрачном проходе), поэтому включается только на время касания.
+    func setOpacity(_ value: Float) {
+        guard abs(value - opacity) > 0.01 || (value == 1 && opacity != 1) else { return }
+        opacity = value
+        if value >= 0.999 {
+            root.components.remove(OpacityComponent.self)
+        } else {
+            root.components.set(OpacityComponent(opacity: value))
+        }
     }
 
     /// Выхлоп: лёгкая сизая дымка, гуще при разгоне.
@@ -164,6 +237,8 @@ struct CarFollower {
     private(set) var lateralAccel: Float = 0
 
     private var liveFingerSpeed: Float = 0
+    /// Слипстрим 0…1: в аэродинамическом следе машины впереди — до +10% к скорости и +6% к максимальной.
+    var draft: Float = 0
     private var prevFinger: SIMD2<Float>?
     private var slipAngle: Float = 0
 
@@ -197,6 +272,12 @@ struct CarFollower {
         self.speed = speed
     }
 
+    /// Столкновение: машину сдвигает и она теряет скорость (не быстрее `limit`).
+    mutating func bump(by offset: SIMD2<Float>, limit: Float) {
+        position += offset
+        speed = min(speed, max(limit, 0))
+    }
+
     /// Новое касание начинает новый след.
     mutating func touchBegan(at p: SIMD2<Float>) {
         path = [p]
@@ -225,11 +306,12 @@ struct CarFollower {
         let remaining = remainingPathLength()
         var target: Float = 0
         if let recorded = pathSpeeds.first {
-            target = max(recorded, minSpeed) + catchUpRate * max(remaining - followGap, 0)
+            target = max(recorded, minSpeed) * (1 + 0.1 * draft) + catchUpRate * max(remaining - followGap, 0)
         }
         // Не проскакивать конец следа. Пока палец движется, конец следа уезжает вперёд.
         let lead = finger != nil ? liveFingerSpeed * 0.25 : 0
-        target = min(target, sqrt(2 * brakeDecel * max(remaining + lead - 0.5, 0)), maxSpeed)
+        let topSpeed = maxSpeed * (1 + 0.06 * draft)
+        target = min(target, sqrt(2 * brakeDecel * max(remaining + lead - 0.5, 0)), topSpeed)
 
         // 3. Продольная динамика: мотор слабеет с ростом скорости, тормоза ограничены.
         let old = speed
@@ -237,7 +319,7 @@ struct CarFollower {
         // пока поворот снова не станет проходимым.
         if slide > 0.15 { target = min(target, speed) }
         if target > speed {
-            let accel = engineAccel * (1 - (speed / maxSpeed) * (speed / maxSpeed))
+            let accel = engineAccel * (1 + 0.4 * draft) * (1 - (speed / topSpeed) * (speed / topSpeed))
             speed += min(target - speed, accel * dt)
         } else {
             speed -= min(speed - target, brakeDecel * dt)

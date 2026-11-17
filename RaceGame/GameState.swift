@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import UIKit
 import Observation
 
 /// Данные для HUD. Обновляется игровым циклом ~10 раз в секунду.
@@ -50,6 +51,28 @@ final class GameState {
         defaults.set(defaults.integer(forKey: GameState.hintRacesKey) + 1, forKey: GameState.hintRacesKey)
     }
 
+    /// Средний FPS и самый долгий кадр (мс) за последние полсекунды; nil — счётчик выключен.
+    var fps: (average: Double, worstMs: Double)?
+
+    /// Следующая медаль-цель в тренировке и её время.
+    var medalTarget: (medal: Medal, time: Double)?
+    /// Призрак-цель на мини-карте.
+    var medalGhostPosition: SIMD2<Float>?
+
+    // Гонка против соперников.
+    var mode: GameMode = .training
+    var lapsTotal = 0
+    /// Текущий круг гонки (с 1), место в гонке и время с зелёного (со штрафами).
+    var raceLap = 1
+    var racePosition = RaceSession.carCount
+    var raceTime: Double = 0
+    /// Сила слипстрима 0…1 (для значка в HUD).
+    var draft: Float = 0
+    /// Итоговая таблица — показывается после финиша.
+    var raceResults: [RaceResult]?
+    /// Соперники на мини-карте.
+    var opponents: [MinimapCar] = []
+
     func reset() {
         speedKmh = 0
         laps = 0
@@ -61,14 +84,26 @@ final class GameState {
         showGestureHint = false
         showHint = GameState.hintNeeded
         ghostPosition = nil
+        medalGhostPosition = nil
         lapInvalid = false
         delta = nil
         banner = nil
         startLights = nil
+        raceLap = 1
+        racePosition = RaceSession.carCount
+        raceTime = 0
+        raceResults = nil
+        draft = 0
+        opponents = []
     }
 }
 
 enum StartLights: Equatable {
     case red(Int)
     case green
+}
+
+struct MinimapCar {
+    let position: SIMD2<Float>
+    let color: UIColor
 }

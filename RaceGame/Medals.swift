@@ -1,0 +1,149 @@
+import Foundation
+import Observation
+import UIKit
+import simd
+
+/// Медали тренировки: бронза, серебро и золото за время круга.
+enum Medal: Int, CaseIterable, Comparable, Identifiable {
+    case bronze = 1, silver, gold
+
+    var id: Int { rawValue }
+    static func < (a: Medal, b: Medal) -> Bool { a.rawValue < b.rawValue }
+
+    var title: String {
+        switch self {
+        case .bronze: return "Бронза"
+        case .silver: return "Серебро"
+        case .gold: return "Золото"
+        }
+    }
+
+    var color: UIColor {
+        switch self {
+        case .bronze: return UIColor(red: 0.85, green: 0.52, blue: 0.27, alpha: 1)
+        case .silver: return UIColor(red: 0.8, green: 0.84, blue: 0.9, alpha: 1)
+        case .gold: return UIColor(red: 1, green: 0.8, blue: 0.2, alpha: 1)
+        }
+    }
+
+    /// Мастерство автопилота, который ставит медальное время (доля от скорости профиля трассы).
+    var skill: Float {
+        switch self {
+        case .bronze: return 0.72
+        case .silver: return 0.79
+        case .gold: return 0.86
+        }
+    }
+}
+
+/// Медальный круг: время и запись для призрака-цели.
+struct MedalRun {
+    let time: Double
+    let ghost: Ghost
+}
+
+/// Медальные круги считаются при запуске, в фоне: автопилот с мастерством медали проезжает быстрый
+/// круг с той же физикой, что у игрока. Так медальное время всегда достижимо и сходится с призраком.
+@MainActor
+@Observable
+final class MedalStore {
+    static let shared = MedalStore()
+
+    private(set) var runs: [TrackID: [Medal: MedalRun]] = [:]
+    /// Меняется после каждого рекорда — чтобы экраны перечитали медали.
+    private(set) var revision = 0
+
+    /// Сколько медальных очков (бронза 1, серебро 2, золото 3) нужно, чтобы открыть трассу.
+    static func requiredPoints(_ id: TrackID) -> Int {
+        switch id {
+        case .oval, .harbor: return 0
+        case .pass: return 2
+        case .forest: return 5
+        }
+    }
+
+    /// Для отладки: `-unlockAll` открывает все трассы.
+    private let unlockAll = ProcessInfo.processInfo.arguments.contains("-unlockAll")
+
+    func prepare() {
+        guard runs.isEmpty else { return }
+        for definition in TrackDefinition.all {
+            Task.detached(priority: .utility) {
+                let track = Track(definition)
+                let profile = SpeedProfile.standard(for: track)
+                var result: [Medal: MedalRun] = [:]
+                for medal in Medal.allCases {
+                    if let run = MedalStore.simulate(track, profile: profile, skill: medal.skill) { result[medal] = run }
+                }
+                await MainActor.run { MedalStore.shared.runs[definition.id] = result }
+            }
+        }
+    }
+
+    func recordsChanged() { revision += 1 }
+
+    func time(_ medal: Medal, on id: TrackID) -> Double? { runs[id]?[medal]?.time }
+
+    /// Лучшая медаль за время круга `lap`.
+    func medal(for lap: Double?, on id: TrackID) -> Medal? {
+        guard let lap else { return nil }
+        return Medal.allCases.reversed().first { m in time(m, on: id).map { lap <= $0 } ?? false }
+    }
+
+    /// Медаль по рекорду трассы.
+    func earned(on id: TrackID) -> Medal? {
+        _ = revision
+        return medal(for: LapRecords.bestLap(id), on: id)
+    }
+
+    /// Следующая цель: медаль на ступень выше заработанной (nil — золото уже есть или времена не готовы).
+    func nextTarget(on id: TrackID) -> Medal? {
+        let current = earned(on: id)?.rawValue ?? 0
+        return Medal(rawValue: current + 1)
+    }
+
+    var points: Int { TrackID.allCases.reduce(0) { $0 + (earned(on: $1)?.rawValue ?? 0) } }
+
+    func isUnlocked(_ id: TrackID) -> Bool { unlockAll || points >= MedalStore.requiredPoints(id) }
+
+    // MARK: - Медальный заезд
+
+    /// Быстрый круг автопилота: разгон с 300 м до линии, круг от линии до линии с записью для призрака.
+    nonisolated static func simulate(_ track: Track, profile: SpeedProfile, skill: Float) -> MedalRun? {
+        let runUp = min(300, track.length * 0.5)
+        let start = track.frame(atDistance: -runUp)
+        var car = CarFollower(position: start.position, heading: atan2(start.tangent.x, start.tangent.y))
+        var progress = -runUp
+        var index = track.nearestIndex(car.position)
+        car.launch(speed: min(30, profile.speed(atDistance: progress) * skill))
+        var finger = VirtualFinger(distance: progress + 8, speed: car.speed)
+        car.touchBegan(at: track.frame(atDistance: finger.distance).position)
+
+        let dt: Float = 1.0 / 60
+        var lapTime: Double?
+        var samples: [SIMD4<Float>] = []
+        for _ in 0..<(60 * 600) {
+            finger.step(dt: dt, carProgress: progress, carSpeed: car.speed,
+                        target: profile.speed(atDistance: finger.distance) * skill)
+            car.step(dt: dt, finger: track.frame(atDistance: finger.distance).position, offTrack: false)
+
+            let i = track.nearestIndex(car.position, near: index)
+            var delta = Float(i - index) * track.step
+            if delta > track.length / 2 { delta -= track.length }
+            if delta < -track.length / 2 { delta += track.length }
+            let before = progress
+            progress += delta
+            index = i
+
+            if lapTime == nil, before < 0, progress >= 0 { lapTime = 0 }
+            guard var t = lapTime else { continue }
+            t += Double(dt)
+            lapTime = t
+            while Double(samples.count) * Ghost.interval <= t {
+                samples.append(SIMD4(car.position.x, car.position.y, car.heading, car.speed))
+            }
+            if progress >= track.length { return MedalRun(time: t, ghost: Ghost(samples: samples)) }
+        }
+        return nil
+    }
+}

@@ -47,8 +47,19 @@ enum LapRecords {
 
     /// Сбросить статистику трассы (для отладки: аргумент запуска `-resetRecords`).
     static func reset(_ id: TrackID) {
-        for key in ["bestLap", "splits", "laps"] { defaults.removeObject(forKey: "\(key).\(id.rawValue)") }
+        for key in ["bestLap", "splits", "laps", "racePlace"] { defaults.removeObject(forKey: "\(key).\(id.rawValue)") }
         Ghost.delete(for: id)
+    }
+
+    /// Лучшее место в гонке на трассе (1 — победа), nil — гонок не было.
+    static func racePlace(_ id: TrackID) -> Int? {
+        let value = defaults.integer(forKey: "racePlace.\(id.rawValue)")
+        return value > 0 ? value : nil
+    }
+
+    static func recordRacePlace(_ id: TrackID, place: Int) {
+        guard place < racePlace(id) ?? .max else { return }
+        defaults.set(place, forKey: "racePlace.\(id.rawValue)")
     }
 
     /// Засчитать честный круг. Возвращает true, если это новый рекорд трассы.

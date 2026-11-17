@@ -25,11 +25,12 @@ enum SceneSetup {
 
 struct GameView: UIViewRepresentable {
     let track: TrackDefinition
+    let mode: GameMode
     let state: GameState
     /// Увеличивается при нажатии «перезапуск».
     let restartToken: Int
 
-    func makeCoordinator() -> GameController { GameController(definition: track, state: state) }
+    func makeCoordinator() -> GameController { GameController(definition: track, mode: mode, state: state) }
     func makeUIView(context: Context) -> ARView { context.coordinator.makeView() }
     static func dismantleUIView(_ uiView: ARView, coordinator: GameController) { coordinator.shutdown() }
     func updateUIView(_ uiView: ARView, context: Context) {
@@ -55,11 +56,40 @@ final class GameController: NSObject {
     private var finger: SIMD2<Float>?
     private var lastTouchLocation: CGPoint = .zero
     private var lapTimer: LapTimer
+
+    // Гонка против соперников (режим «Гонка»).
+    private let mode: GameMode
+    private let session: RaceSession?
+    /// Время с загрузки до зелёного: огни гаснут по секунде, потом зелёный. nil — гонка уже идёт.
+    private var raceLightsTime: Float? = 0
+    private var raceLaps = 0
+    private var racePenalty: Double = 0
+    private var raceFinished = false
+    /// После финиша машину ведёт автопилот: виртуальный палец по осевой со спокойной скоростью.
+    private var cooldown: VirtualFinger?
+    /// Счётчик кадров (настройка «Показывать FPS»): кадры и самый долгий кадр за полсекунды.
+    private let showFPS = RaceSettings.showFPS
+    private var fpsFrames = 0
+    private var fpsWindowStart: CFTimeInterval = 0
+    private var fpsLastFrame: CFTimeInterval = 0
+    private var fpsWorst: CFTimeInterval = 0
+    /// Дистанция игрока от линии старта (на решётке — отрицательная) и индекс ближайшей точки.
+    private var playerProgress: Float = 0
+    private var playerIndex = 0
+    private var hitCooldown: Float = 0
+    private var isRace: Bool { mode == .race }
+    /// До зелёного в гонке касания не принимаются.
+    private var raceWaiting: Bool { isRace && raceLightsTime != nil }
     /// Лучший круг для призрака, его сектора и запись текущего круга.
     private var ghost: Ghost?
     private var bestSplits: [Double]?
     private var recording = Ghost()
     private var ghostCar: GhostCar?
+    /// Призрак медали-цели (следующей не полученной) — в её цвете.
+    private var medalGhostCar: GhostCar?
+    private var medalTarget: Medal?
+    private var medalRun: MedalRun?
+    private var anchor: AnchorEntity?
     private var deltaTimer: Float = 0
     // Возврат на трассу (настройка): сколько секунд машина за поребриком и где съехала с трассы.
     private let resetToTrack = RaceSettings.resetToTrack
@@ -80,7 +110,7 @@ final class GameController: NSObject {
     private var wrongWayTimer: Float = 0
     /// Сколько секунд машина стоит без пальца на экране; дольше `idleHintDelay` — подсказка жестом.
     private var idleTime: Float = 0
-    private let idleHintDelay: Float = 3
+    private let idleHintDelay: Float = 1.5
 
     /// Старт с хода (настройка): машина сама разгоняется по осевой к линии старта, пока гаснут три красных огня.
     /// Огни привязаны к расстоянию до линии: за `greenDistance` метров (~3 с) загорается зелёный, и первое
@@ -127,29 +157,41 @@ final class GameController: NSObject {
     private var cameraDistance: Float = 100
     private var cameraTarget: SIMD3<Float> = .zero
 
-    init(definition: TrackDefinition, state: GameState) {
+    init(definition: TrackDefinition, mode: GameMode, state: GameState) {
         self.state = state
+        self.mode = mode
         track = Track(definition)
-        let start = GameController.spawnPose(track)
+        session = mode == .race ? RaceSession(track: track) : nil
+        let start = GameController.spawnPose(track, session: session)
         follower = CarFollower(position: start.position, heading: start.heading)
         lapTimer = LapTimer(pointCount: track.points.count, startProgress: track.nearestIndex(start.position))
-        lapTimer.invalidatesOnOffTrack = GameController.invalidatesOnOffTrack
+        // В гонке круг не аннулируется выездами — засчитывается, если пройдены все отсечки.
+        lapTimer.invalidatesOnOffTrack = mode == .training && GameController.invalidatesOnOffTrack
         lastOnTrackDistance = track.nearestIndexDistance(start.position)
         if ProcessInfo.processInfo.arguments.contains("-resetRecords") { LapRecords.reset(definition.id) }
-        ghost = Ghost.load(for: definition.id)
-        bestSplits = LapRecords.bestSplits(definition.id)
+        if mode == .training {
+            ghost = Ghost.load(for: definition.id)
+            bestSplits = LapRecords.bestSplits(definition.id)
+        }
         state.carPosition = start.position
+        state.mode = mode
+        state.lapsTotal = session?.lapsTotal ?? 0
 
         var markerMat = UnlitMaterial(color: .white)
         markerMat.blending = .transparent(opacity: 0.55)
         let markerSize = definition.carScale / 1.5
         fingerMarker = ModelEntity(mesh: .generateCylinder(height: 0.05, radius: 1.3 * markerSize), materials: [markerMat])
         super.init()
-        prepareRunUp()
+        prepareStart()
     }
 
-    /// С разгоном — машина стоит за `runUpDistance` до линии (на коротких трассах ближе), иначе — сразу за линией.
-    private static func spawnPose(_ track: Track) -> (position: SIMD2<Float>, heading: Float) {
+    /// Гонка — последнее место на стартовой решётке. Тренировка с разгоном — за `runUpDistance` до линии
+    /// (на коротких трассах ближе), без разгона — сразу за линией.
+    private static func spawnPose(_ track: Track, session: RaceSession?) -> (position: SIMD2<Float>, heading: Float) {
+        if let session {
+            let grid = session.gridPose(slot: RaceSession.playerGridSlot)
+            return (grid.position, grid.heading)
+        }
         guard RaceSettings.rollingStart else { return track.startPose }
         let f = track.frame(atDistance: -runUpDistance(track))
         return (f.position, atan2(f.tangent.x, f.tangent.y))
@@ -158,7 +200,19 @@ final class GameController: NSObject {
     /// На коротких трассах разгон короче — машина не должна стоять дальше середины круга от линии.
     private static func runUpDistance(_ track: Track) -> Float { min(runUpDistance, track.length * 0.5) }
 
-    private func prepareRunUp() {
+    private func prepareStart() {
+        playerIndex = track.nearestIndex(follower.position)
+        playerProgress = wrappedDistance(Float(playerIndex) * track.step)
+        raceLaps = 0
+        racePenalty = 0
+        raceFinished = false
+        cooldown = nil
+        if isRace {
+            runUp = nil
+            raceLightsTime = 0
+            state.startLights = .red(3)
+            return
+        }
         guard RaceSettings.rollingStart else { runUp = nil; return }
         runUp = RunUp(fingerDistance: -GameController.runUpDistance(track), fingerSpeed: 0)
         state.startLights = .red(3)
@@ -170,6 +224,7 @@ final class GameController: NSObject {
 
         let anchor = AnchorEntity(world: .zero)
         view.scene.addAnchor(anchor)
+        self.anchor = anchor
         anchor.addChild(track.makeEntity())
         anchor.addChild(sun)
 
@@ -182,6 +237,7 @@ final class GameController: NSObject {
                 anchor.addChild(car.root)
                 car.update(position: self.follower.position, heading: self.follower.heading,
                            speed: 0, steer: 0, braking: false, dt: 0)
+                await self.session?.loadCars(into: anchor)
             } catch {
                 print("Не удалось загрузить race_car.usdz: \(error)")
             }
@@ -234,11 +290,12 @@ final class GameController: NSObject {
     func restartIfNeeded(token: Int) {
         guard token != restartToken else { return }
         restartToken = token
-        let start = GameController.spawnPose(track)
+        let start = GameController.spawnPose(track, session: session)
         follower = CarFollower(position: start.position, heading: start.heading)
         finger = nil
         lapTimer = LapTimer(pointCount: track.points.count, startProgress: track.nearestIndex(start.position))
-        lapTimer.invalidatesOnOffTrack = GameController.invalidatesOnOffTrack
+        lapTimer.invalidatesOnOffTrack = mode == .training && GameController.invalidatesOnOffTrack
+        session?.reset()
         lastOnTrackDistance = track.nearestIndexDistance(start.position)
         offTrackStreak = 0
         resetting = false
@@ -247,16 +304,20 @@ final class GameController: NSObject {
         fadeView.alpha = 0
         recording = Ghost()
         ghostCar?.root.isEnabled = false
+        medalGhostCar?.root.isEnabled = false
         deltaTimer = 0
         bannerTimer = 0
         autopilotDistance = -14
         car?.update(position: follower.position, heading: follower.heading, speed: 0, steer: 0, braking: false, dt: 0)
         state.reset()
+        state.medalTarget = medalTarget.flatMap { m in medalRun.map { (m, $0.time) } }
+        state.mode = mode
+        state.lapsTotal = session?.lapsTotal ?? 0
         wrongWayTimer = 0
         state.carPosition = follower.position
         state.isLoading = car == nil
         lightsTimer = 0
-        prepareRunUp()
+        prepareStart()
         snapCamera()
     }
 
@@ -266,6 +327,8 @@ final class GameController: NSObject {
         let point = groundPoint(gesture.location(in: arView))
         // Во время возврата на трассу касания не принимаются; после — нужно новое касание.
         if resetting { finger = nil; return }
+        // В гонке: до зелёного и после финиша касания не принимаются.
+        if raceWaiting || raceFinished { finger = nil; return }
         // Во время отсчёта машина едет сама; после «Старт!» первое касание забирает управление.
         var phase = gesture.state
         if let runUp {
@@ -306,13 +369,17 @@ final class GameController: NSObject {
 
     private func update(dt: Float) {
         guard dt > 0 else { return }
+        if showFPS { countFrame() }
         if arView.bounds.size != fittedSize, arView.bounds.width > 0 {
             configureCamera(for: arView.bounds.size)
         }
 
-        if runUp != nil {
+        if isRace { updateRaceLights(dt: dt) }
+        if cooldown != nil {
+            driveCooldown(dt: dt)
+        } else if runUp != nil {
             driveRunUp(dt: dt)
-        } else if autopilot {
+        } else if autopilot && !raceWaiting && !raceFinished {
             driveAutopilot(dt: dt)
         }
 
@@ -336,6 +403,16 @@ final class GameController: NSObject {
         }
         let oldSpeed = follower.speed
         follower.step(dt: dt, finger: finger, offTrack: offTrack)
+        updatePlayerProgress()
+        if let session, car != nil {
+            session.update(dt: dt, player: &follower, playerProgress: playerProgress, playerIndex: playerIndex)
+            hitCooldown -= dt
+            if session.playerHit && hitCooldown <= 0 {
+                hitCooldown = 0.4
+                haptics.collision()
+            }
+        }
+        car?.updateWind(draft: follower.draft, dt: dt)
         car?.update(position: follower.position, heading: follower.heading, speed: follower.speed,
                     steer: follower.steer, braking: follower.braking, dt: dt)
         updateEffects(oldSpeed: oldSpeed, offTrack: offTrack, onCurb: onCurb, dt: dt)
@@ -354,6 +431,11 @@ final class GameController: NSObject {
             state.cameraYaw = cameraYaw
             state.ghostPosition = ghostCar?.root.isEnabled == true
                 ? SIMD2(ghostCar!.root.position.x, ghostCar!.root.position.z) : nil
+            if let session {
+                state.opponents = session.minimapCars.map { MinimapCar(position: $0.position, color: $0.color) }
+            }
+            state.medalGhostPosition = medalGhostCar?.root.isEnabled == true
+                ? SIMD2(medalGhostCar!.root.position.x, medalGhostCar!.root.position.z) : nil
         }
 
         hudTimer += dt
@@ -362,6 +444,14 @@ final class GameController: NSObject {
             state.speedKmh = Int((follower.speed * 3.6).rounded())
             state.currentLapTime = lapTimer.lapTime
             state.offTrack = offTrack && follower.speed > 0.5
+            if let session, !raceFinished {
+                state.raceTime = session.raceTime + racePenalty
+                state.racePosition = session.playerPosition(playerProgress: playerProgress, playerFinish: nil)
+                state.raceLap = min(raceLaps + 1, session.lapsTotal)
+                let wasDrafting = state.draft > 0.3
+                state.draft = follower.draft
+                if !wasDrafting && follower.draft > 0.3 { haptics.sector() }
+            }
         }
         if deltaTimer > 0 {
             deltaTimer -= dt
@@ -372,6 +462,7 @@ final class GameController: NSObject {
             if bannerTimer <= 0 { state.banner = nil }
         }
         let idle = finger == nil && follower.speed < 0.5 && runUp == nil && !resetting && !state.isLoading
+            && !raceWaiting && !raceFinished
         idleTime = idle ? idleTime + dt : 0
         let showHint = idleTime > idleHintDelay
         if showHint && !state.showGestureHint { state.gestureHintPath = gestureHintPath() }
@@ -548,7 +639,7 @@ final class GameController: NSObject {
     /// Зачёт круга, сектора и запись круга для призрака.
     private func updateLaps(dt: Float, offTrack: Bool) {
         let events = lapTimer.update(progress: track.nearestIndex(follower.position), offTrack: offTrack, dt: Double(dt))
-        if lapTimer.isRunning {
+        if lapTimer.isRunning && !isRace {
             // Запись положения 20 раз в секунду (по времени круга).
             while Double(recording.samples.count) * Ghost.interval <= lapTimer.lapTime {
                 recording.samples.append(SIMD4(follower.position.x, follower.position.y, follower.heading, follower.speed))
@@ -570,7 +661,9 @@ final class GameController: NSObject {
                 state.lapInvalid = true
                 haptics.wrongWay()
             case .lapFinished(let time, let splits, let valid):
-                if valid {
+                if isRace {
+                    finishRaceLap(time: time, valid: valid)
+                } else if valid {
                     finishLap(time: time, splits: splits)
                 } else {
                     showBanner("Круг не засчитан", good: false)
@@ -581,6 +674,104 @@ final class GameController: NSObject {
 
     private static let lapLog = Logger(subsystem: "com.example.RaceGame", category: "laps")
 
+    // MARK: - Гонка
+
+    /// Разница расстояний по кругу, приведённая к (−L/2, L/2].
+    private func wrappedDistance(_ d: Float) -> Float {
+        var d = d.truncatingRemainder(dividingBy: track.length)
+        if d > track.length / 2 { d -= track.length }
+        if d < -track.length / 2 { d += track.length }
+        return d
+    }
+
+    private func updatePlayerProgress() {
+        let index = track.nearestIndex(follower.position, near: playerIndex)
+        playerProgress += wrappedDistance(Float(index - playerIndex) * track.step)
+        playerIndex = index
+    }
+
+    /// Старт с места: после загрузки три красных огня гаснут по секунде, затем загорается зелёный.
+    private func updateRaceLights(dt: Float) {
+        guard var t = raceLightsTime, !state.isLoading else { return }
+        let before = t
+        t += dt
+        for (i, at) in [Float(1), 2, 3].enumerated() where before < at && t >= at {
+            state.startLights = .red(2 - i)
+            audio.play(.countdown)
+            haptics.countdown(go: false)
+        }
+        if t >= 3.7 {
+            raceLightsTime = nil
+            state.startLights = .green
+            audio.play(.go)
+            haptics.countdown(go: true)
+            lightsTimer = 1.2
+            session?.start()
+        } else {
+            raceLightsTime = t
+        }
+    }
+
+    private func finishRaceLap(time: Double, valid: Bool) {
+        guard let session, !raceFinished else { return }
+        guard valid else {
+            showBanner("Срезка · круг не засчитан", good: false)
+            return
+        }
+        raceLaps += 1
+        state.laps = raceLaps
+        state.bestLap = min(state.bestLap ?? .infinity, time)
+        if raceLaps >= session.lapsTotal {
+            finishRace()
+        } else {
+            audio.play(.lap)
+            haptics.lap(record: false)
+            if raceLaps == session.lapsTotal - 1 { showBanner("Последний круг", good: true, icon: "flag.checkered") }
+        }
+    }
+
+    private func finishRace() {
+        guard let session else { return }
+        raceFinished = true
+        // Палец отпускается, дальше машину спокойно ведёт автопилот.
+        finger = nil
+        cooldown = VirtualFinger(distance: playerProgress + 8, speed: follower.speed)
+        follower.touchBegan(at: track.frame(atDistance: playerProgress + 8).position)
+        let total = session.raceTime + racePenalty
+        let results = session.results(playerTime: total)
+        let place = results.first(where: \.isPlayer)?.position ?? session.lapsTotal
+        state.raceTime = total
+        state.racePosition = place
+        state.raceResults = results
+        LapRecords.recordRacePlace(track.definition.id, place: place)
+        MedalStore.shared.recordsChanged()
+        audio.play(place == 1 ? .record : .lap)
+        haptics.lap(record: place == 1)
+    }
+
+    private func countFrame() {
+        let now = CACurrentMediaTime()
+        if fpsLastFrame > 0 { fpsWorst = max(fpsWorst, now - fpsLastFrame) }
+        fpsLastFrame = now
+        fpsFrames += 1
+        if fpsWindowStart == 0 { fpsWindowStart = now }
+        if now - fpsWindowStart >= 0.5 {
+            state.fps = (Double(fpsFrames) / (now - fpsWindowStart), fpsWorst * 1000)
+            fpsFrames = 0
+            fpsWindowStart = now
+            fpsWorst = 0
+        }
+    }
+
+    /// Автопилот после финиша: как соперники — палец впереди машины со скоростью ~70% от предельной.
+    private func driveCooldown(dt: Float) {
+        guard var c = cooldown, let session else { return }
+        c.step(dt: dt, carProgress: playerProgress, carSpeed: follower.speed,
+               target: session.profileSpeed(atDistance: c.distance) * 0.7)
+        finger = track.frame(atDistance: c.distance).position
+        cooldown = c
+    }
+
     private func finishLap(time: Double, splits: [Double]) {
         let id = track.definition.id
         let previousBest = LapRecords.bestLap(id)
@@ -588,20 +779,58 @@ final class GameController: NSObject {
         state.bestLap = min(state.bestLap ?? .infinity, time)
         if let previousBest { showDelta(time - previousBest, label: "Круг") }
 
+        let store = MedalStore.shared
+        let oldMedal = store.earned(on: id)
         let isRecord = LapRecords.recordLap(id, time: time, splits: splits, ghost: recording)
         if isRecord {
             ghost = recording
             bestSplits = splits
+            store.recordsChanged()
         }
-        // Первый круг на трассе — просто круг; рекорд — когда побит прежний.
-        let celebrate = isRecord && previousBest != nil
-        if celebrate { showBanner("Новый рекорд!", good: true) }
+        let newMedal = store.earned(on: id)
+        // Первый круг на трассе — просто круг; рекорд — когда побит прежний. Медаль важнее рекорда.
+        let celebrate = isRecord && (previousBest != nil || newMedal != nil)
+        if let newMedal, newMedal > oldMedal ?? .bronze || oldMedal == nil {
+            showBanner("\(newMedal.title)!", good: true, icon: "medal.fill")
+            updateMedalTarget()
+        } else if celebrate {
+            showBanner("Новый рекорд!", good: true)
+        }
         audio.play(celebrate ? .record : .lap)
         haptics.lap(record: celebrate)
     }
 
-    /// Призрак повторяет лучший круг синхронно с текущим: в одно и то же время от старта круга.
+    /// Цель — следующая медаль; медальные круги считаются в фоне, поэтому могут появиться не сразу.
+    private func updateMedalTarget() {
+        guard mode == .training else { return }
+        let store = MedalStore.shared
+        let target = store.nextTarget(on: track.definition.id)
+        let run = target.flatMap { store.runs[track.definition.id]?[$0] }
+        guard target != medalTarget || (run != nil) != (medalRun != nil) else { return }
+        medalTarget = target
+        medalRun = run
+        state.medalTarget = target.flatMap { m in run.map { (m, $0.time) } }
+        medalGhostCar?.root.removeFromParent()
+        medalGhostCar = nil
+        if let target, run != nil, let anchor {
+            let ghost = GhostCar(scale: track.definition.carScale, color: target.color)
+            ghost.root.isEnabled = false
+            anchor.addChild(ghost.root)
+            medalGhostCar = ghost
+        }
+    }
+
+    /// Призраки повторяют лучший круг и медальный круг синхронно с текущим: в одно и то же время от старта круга.
     private func updateGhost(dt: Float) {
+        if medalRun == nil && medalTarget == nil || medalGhostCar == nil { updateMedalTarget() }
+        if let medalGhostCar {
+            if lapTimer.isRunning, let pose = medalRun?.ghost.pose(at: lapTimer.lapTime) {
+                medalGhostCar.root.isEnabled = true
+                medalGhostCar.update(position: pose.position, heading: pose.heading)
+            } else {
+                medalGhostCar.root.isEnabled = false
+            }
+        }
         guard let ghostCar else { return }
         guard lapTimer.isRunning, let pose = ghost?.pose(at: lapTimer.lapTime) else {
             ghostCar.root.isEnabled = false
@@ -635,14 +864,16 @@ final class GameController: NSObject {
         let heading = atan2(frame.tangent.x, frame.tangent.y)
         follower = CarFollower(position: frame.position, heading: heading)
         car?.update(position: frame.position, heading: heading, speed: 0, steer: 0, braking: false, dt: 0)
+        updatePlayerProgress()
         offTrackStreak = 0
         lapTimer.forgiveCurrentExcursion()
         // «Не засчитывать круг» — выезд с возвратом аннулирует круг; «Игнорировать» — только штраф по времени.
-        let invalidates = GameController.invalidatesOnOffTrack && lapTimer.isRunning
+        let invalidates = lapTimer.invalidatesOnOffTrack && lapTimer.isRunning
         if invalidates {
             lapTimer.invalidate()
         } else {
             lapTimer.addPenalty(RaceSettings.resetPenalty)
+            if isRace { racePenalty += RaceSettings.resetPenalty }
         }
         GameController.lapLog.info("respawn at distance=\(self.lastOnTrackDistance) lapTime=\(self.lapTimer.lapTime)")
         showBanner(invalidates ? "Возврат на трассу · круг не засчитан"

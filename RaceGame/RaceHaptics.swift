@@ -69,6 +69,11 @@ final class RaceHaptics {
         if go { bump.impactOccurred(intensity: 1) } else { tick.impactOccurred(intensity: 0.6) }
     }
 
+    /// Удар о соперника.
+    func collision() {
+        bump.impactOccurred(intensity: 0.8)
+    }
+
     func wrongWay() {
         notify.notificationOccurred(.warning)
     }

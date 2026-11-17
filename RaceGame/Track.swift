@@ -83,6 +83,21 @@ struct Track {
         return best
     }
 
+    /// Быстрый поиск ближайшей точки рядом с прошлой (машина за кадр сдвигается на метр-другой).
+    /// Если на краю окна расстояние всё ещё убывает, ищет по всей трассе.
+    func nearestIndex(_ p: SIMD2<Float>, near hint: Int, window: Int = 60) -> Int {
+        let n = points.count
+        var best = hint, bestD = Float.infinity
+        for k in -window...window {
+            let i = ((hint + k) % n + n) % n
+            let d = simd_distance_squared(p, points[i])
+            if d < bestD { bestD = d; best = i }
+        }
+        let offset = ((best - hint) % n + n) % n
+        let distanceFromHint = min(offset, n - offset)
+        return distanceFromHint >= window - 1 ? nearestIndex(p) : best
+    }
+
     /// Расстояние вдоль трассы от старта до ближайшей к точке позиции.
     func nearestIndexDistance(_ p: SIMD2<Float>) -> Float { Float(nearestIndex(p)) * step }
 
