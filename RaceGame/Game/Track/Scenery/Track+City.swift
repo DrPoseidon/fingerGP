@@ -4,20 +4,20 @@ import UIKit
 import simd
 
 /// Город и порт («Гавань»): кварталы домов вокруг трассы, скверы, фонари вдоль трассы,
-/// а за стартовой прямой — порт с контейнерами и кранами и вода.
+/// вдоль стартовой прямой — набережная, у её концов — порт с контейнерами и кранами.
 @MainActor
 extension Track {
     func addCity(_ builder: SceneryBuilder) {
         let s = propScale
         let minP = points.reduce(SIMD2<Float>(repeating: .infinity)) { simd_min($0, $1) }
         let maxP = points.reduce(SIMD2<Float>(repeating: -.infinity)) { simd_max($0, $1) }
-        // Набережная — за стартовой прямой (она у самого «южного» края трассы).
-        let quayZ = maxP.y + 110 * s
+        // Набережная — сразу за стартовой прямой (она у самого «южного» края трассы), чтобы вода была в кадре.
+        let quayZ = maxP.y + halfWidth + curbWidth + 16 * s
         var rng = SeededRandom(seed: 0xC17)
 
         addWater(builder, quayZ: quayZ, from: minP.x - 600, to: maxP.x + 600)
         addStreetLights(builder)
-        addFrontage(builder, portZ: maxP.y, rng: &rng)
+        addFrontage(builder, portZ: maxP.y, quayZ: quayZ, rng: &rng)
         addPort(builder, from: maxP.y, quayZ: quayZ, minX: minP.x - 250, maxX: maxP.x + 250, rng: &rng)
         addBlocks(builder, min: minP - 260, max: SIMD2(maxP.x + 260, maxP.y), portZ: maxP.y, rng: &rng)
         addInfill(builder, min: minP - 60, max: SIMD2(maxP.x + 60, maxP.y), rng: &rng)
@@ -160,7 +160,7 @@ extension Track {
     }
 
     /// Ряд невысоких домов вдоль трассы с обеих сторон, развёрнутых по её направлению, — «городская трасса».
-    private func addFrontage(_ builder: SceneryBuilder, portZ: Float, rng: inout SeededRandom) {
+    private func addFrontage(_ builder: SceneryBuilder, portZ: Float, quayZ: Float, rng: inout SeededRandom) {
         let s = propScale
         builder.material("warehouse") { Self.tiled(Self.ribTexture, tint: UIColor(red: 0.42, green: 0.5, blue: 0.58, alpha: 1)) }
         builder.material("warehouse.roof") { Self.plain(0.58, 0.6, 0.62) }
@@ -179,7 +179,7 @@ extension Track {
                 // Со стороны порта вдоль трассы — длинные низкие склады.
                 let warehouse = c.y + depth > portZ
                 let probes = [-0.5, 0, 0.5].flatMap { u in [-0.5, 0.5].map { v in c + t * Float(u) * width + nrm * Float(v) * depth } }
-                guard probes.allSatisfy({ clearance($0) > 4 * s }),
+                guard probes.allSatisfy({ clearance($0) > 4 * s && $0.y < quayZ - 4 * s }),
                       builder.isFree(c, radius: min(width, depth) / 2) else { continue }
                 builder.reserve(c, radius: max(width, depth) / 2)
                 if warehouse {
@@ -283,11 +283,11 @@ extension Track {
                 $0.box(center: SIMD3((x + x2) / 2, 0.4 * s, quayZ - 1.5 * s), size: SIMD3(x2 - x, 0.8 * s, 3 * s))
             }
         }
-        // Несколько катеров у причала и на рейде.
         builder.material("boat") { Self.plain(0.95, 0.95, 0.95, roughness: 0.5) }
         builder.material("boat.deck") { Self.plain(0.55, 0.38, 0.25) }
-        for k in 0..<6 {
-            let p = SIMD2(x0 + 350 + Float(k) * 260, quayZ + 40 * s + Float(k % 3) * 45 * s)
+        // Катера — у причала вдоль прямой и подальше на рейде.
+        for k in 0..<10 {
+            let p = SIMD2(x0 + 500 + Float(k) * 170, quayZ + (k % 2 == 0 ? 9 : 30) * s + Float(k % 3) * 8 * s)
             let length = (14 + Float(k % 2) * 10) * s
             builder.add("boat", at: p) {
                 $0.box(center: ground(p, 1.2 * s), size: SIMD3(length, 2 * s, length * 0.32))
@@ -311,7 +311,8 @@ extension Track {
         let gap: Float = 0.6 * s
         let block = SIMD2(5 * (box.x + gap), 4 * (box.z + gap))
         let lane = SIMD2<Float>(10, 9) * s
-        var z = trackZ + halfWidth + curbWidth + 14 * s
+        // Терминал — в полосе у набережной, там, где трасса отходит от воды (у концов стартовой прямой).
+        var z = trackZ - 130 * s
         while z + block.y < quayZ - 22 * s {
             var x = minX
             while x + block.x < maxX {
@@ -340,10 +341,13 @@ extension Track {
 
         builder.material("crane") { Self.plain(0.95, 0.6, 0.12, roughness: 0.6) }
         let height = 30 * s, gauge = 16 * s, span = 18 * s
-        for k in 0..<4 {
-            let x = minX + 300 + Float(k) * 330
+        // Краны — на причале у концов прямой, там, где они не загораживают трассу.
+        var placed = 0
+        for x in stride(from: minX, to: maxX, by: 40 * s) where placed < 4 {
             let p = SIMD2(x, quayZ - gauge / 2 - 2 * s)
-            guard clearance(p) > 30 * s else { continue }
+            guard clearance(p) > 30 * s, builder.isFree(p, radius: span) else { continue }
+            builder.reserve(p, radius: 2 * span)
+            placed += 1
             builder.add("crane", at: p) {
                 for dx: Float in [-span / 2, span / 2] {
                     for dz: Float in [-gauge / 2, gauge / 2] {
