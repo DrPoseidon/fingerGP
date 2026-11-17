@@ -30,7 +30,9 @@ struct SettingsView: View {
                           : String(format: "Через полсекунды за поребриком экран затемняется, машина появляется на трассе там, где съехала, а к времени круга добавляется штраф +%.0f с.", RaceSettings.resetPenalty))
             SettingToggle(title: "Старт с хода", isOn: $rollingStart)
             SettingToggle(title: "Столкновения в гонке", isOn: $collisions)
+            #if DEBUG
             SettingToggle(title: "Показывать FPS", isOn: $showFPS)
+            #endif
             Spacer()
         }
         .padding(24)

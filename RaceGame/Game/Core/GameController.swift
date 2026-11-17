@@ -80,6 +80,7 @@ final class GameController: NSObject {
     var wrongWayTimer: Float = 0
     /// Сколько секунд машина стоит без пальца на экране; дольше `idleHintDelay` — подсказка жестом.
     var idleTime: Float = 0
+    var audioPaused = false
     let idleHintDelay: Float = 1.5
 
     /// Старт с хода (настройка): машина сама разгоняется по осевой к линии старта, пока гаснут три красных огня.
@@ -105,14 +106,14 @@ final class GameController: NSObject {
     static let greenDistance: Float = 150
 
     /// Демо-режим для проверки без касаний: запуск с аргументом `-autopilot`.
-    let autopilot = ProcessInfo.processInfo.arguments.contains("-autopilot")
+    let autopilot = DebugFlags.has("-autopilot")
     var autopilotDistance: Float = -14
     /// `-reverse` — демо-палец ведёт машину против хода трассы (проверка «не того направления»).
     /// `-wobble` — демо-палец «дрожит», чтобы проверить сглаживание следа.
-    let autopilotWobble = ProcessInfo.processInfo.arguments.contains("-wobble")
+    let autopilotWobble = DebugFlags.has("-wobble")
     /// `-drift` — раз за круг демо-палец уводит машину на 16 м в сторону, на траву (проверка выездов).
-    let autopilotDrift = ProcessInfo.processInfo.arguments.contains("-drift")
-    let autopilotDirection: Float = ProcessInfo.processInfo.arguments.contains("-reverse") ? -1 : 1
+    let autopilotDrift = DebugFlags.has("-drift")
+    let autopilotDirection: Float = DebugFlags.has("-reverse") ? -1 : 1
 
     // Камера: фиксированный изометрический ракурс, следует за машиной.
     let cameraFov: Float = 32
@@ -138,7 +139,7 @@ final class GameController: NSObject {
         // В гонке круг не аннулируется выездами — засчитывается, если пройдены все отсечки.
         lapTimer.invalidatesOnOffTrack = mode != .race && GameController.invalidatesOnOffTrack
         lastOnTrackDistance = track.nearestIndexDistance(start.position)
-        if ProcessInfo.processInfo.arguments.contains("-resetRecords") { LapRecords.reset(definition.id) }
+        if DebugFlags.has("-resetRecords") { LapRecords.reset(definition.id) }
         if mode == .training {
             ghost = Ghost.load(for: definition.id)
             bestSplits = LapRecords.bestSplits(definition.id)
@@ -212,7 +213,7 @@ final class GameController: NSObject {
                            speed: 0, steer: 0, braking: false, dt: 0)
                 await self.session?.loadCars(into: anchor)
             } catch {
-                print("Не удалось загрузить race_car.usdz: \(error)")
+                Log.app.error("Не удалось загрузить race_car.usdz: \(error.localizedDescription, privacy: .public)")
             }
             self?.state.isLoading = false
         }
@@ -297,6 +298,13 @@ final class GameController: NSObject {
     /// Кадр: палец (настоящий или виртуальный) → физика машины → соперники → камера → круги → HUD.
     func update(dt: Float) {
         guard dt > 0 else { return }
+        // Пауза: стоит всё — физика, соперники, время круга и гонки.
+        if state.isPaused != audioPaused {
+            audioPaused = state.isPaused
+            audio.setPaused(audioPaused)
+            finger = nil
+        }
+        if state.isPaused { return }
         if showFPS { countFrame() }
         if arView.bounds.size != fittedSize, arView.bounds.width > 0 {
             configureCamera(for: arView.bounds.size)
@@ -347,7 +355,7 @@ final class GameController: NSObject {
         }
         if offTrack != wasOffTrack {
             wasOffTrack = offTrack
-            GameController.lapLog.debug("offTrack=\(offTrack) fromCenter=\(fromCenter) lapTime=\(self.lapTimer.lapTime)")
+            Log.laps.debug("offTrack=\(offTrack) fromCenter=\(fromCenter) lapTime=\(self.lapTimer.lapTime)")
         }
         return (offTrack, onCurb)
     }

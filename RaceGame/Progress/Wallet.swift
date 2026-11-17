@@ -16,10 +16,7 @@ final class Wallet {
 
     private init() {
         // Для отладки: `-coins N` — задать баланс.
-        let args = ProcessInfo.processInfo.arguments
-        if let i = args.firstIndex(of: "-coins"), i + 1 < args.count, let n = Int(args[i + 1]) {
-            defaults.set(n, forKey: "wallet.coins")
-        }
+        if let n = DebugFlags.int("-coins") { defaults.set(n, forKey: "wallet.coins") }
         coins = defaults.integer(forKey: "wallet.coins")
         owned = Set(defaults.stringArray(forKey: "wallet.owned") ?? [])
         selectedCar = defaults.string(forKey: "wallet.car") ?? CarModel.standard.id

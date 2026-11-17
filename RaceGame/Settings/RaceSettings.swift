@@ -45,7 +45,11 @@ enum RaceSettings {
 
     /// Счётчик кадров и статистика RealityKit поверх сцены (для проверки производительности).
     static var showFPS: Bool {
-        UserDefaults.standard.bool(forKey: showFPSKey)
+        #if DEBUG
+        return UserDefaults.standard.bool(forKey: showFPSKey)
+        #else
+        return false
+        #endif
     }
 
     /// Старт с хода: машина разгоняется до линии старта под отсчёт 3-2-1. По умолчанию включён.

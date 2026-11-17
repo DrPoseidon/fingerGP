@@ -40,7 +40,7 @@ extension GameController {
             lapTimer.addPenalty(RaceSettings.resetPenalty)
             if isRace { racePenalty += RaceSettings.resetPenalty }
         }
-        GameController.lapLog.info("respawn at distance=\(self.lastOnTrackDistance) lapTime=\(self.lapTimer.lapTime)")
+        Log.laps.info("respawn at distance=\(self.lastOnTrackDistance) lapTime=\(self.lapTimer.lapTime)")
         showBanner(invalidates ? "Возврат на трассу · круг не засчитан"
                    : String(format: "Возврат на трассу · +%.0f с", RaceSettings.resetPenalty), good: false,
                    icon: "arrow.uturn.backward.circle.fill")

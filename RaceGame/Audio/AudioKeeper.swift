@@ -15,7 +15,6 @@ final class AudioKeeper {
     private var wanted = false
     private var lastAttempt: CFTimeInterval = 0
     private var observers: [NSObjectProtocol] = []
-    private static let log = Logger(subsystem: "com.example.RaceGame", category: "audio")
 
     init(engine: AVAudioEngine, name: String) {
         self.engine = engine
@@ -60,9 +59,9 @@ final class AudioKeeper {
             try AVAudioSession.sharedInstance().setActive(true)
             engine.prepare()
             try engine.start()
-            AudioKeeper.log.info("\(self.name, privacy: .public): audio engine started")
+            Log.audio.info("\(self.name, privacy: .public): audio engine started")
         } catch {
-            AudioKeeper.log.error("\(self.name, privacy: .public): audio engine start failed: \(error.localizedDescription, privacy: .public)")
+            Log.audio.error("\(self.name, privacy: .public): audio engine start failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

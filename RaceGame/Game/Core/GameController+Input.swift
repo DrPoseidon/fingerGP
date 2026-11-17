@@ -8,7 +8,7 @@ extension GameController {
     @objc func handleTouch(_ gesture: UILongPressGestureRecognizer) {
         let point = groundPoint(gesture.location(in: arView))
         // Во время возврата на трассу касания не принимаются; после — нужно новое касание.
-        if resetting { finger = nil; return }
+        if resetting || state.isPaused { finger = nil; return }
         // В гонке: до зелёного и после финиша касания не принимаются.
         if raceWaiting || raceFinished { finger = nil; return }
         // Во время отсчёта машина едет сама; после «Старт!» первое касание забирает управление.

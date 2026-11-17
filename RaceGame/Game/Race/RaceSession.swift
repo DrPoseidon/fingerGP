@@ -39,8 +39,7 @@ final class RaceSession {
     init(track: Track) {
         self.track = track
         // Для отладки: `-laps N` — короткая гонка.
-        let args = ProcessInfo.processInfo.arguments
-        if let i = args.firstIndex(of: "-laps"), i + 1 < args.count, let laps = Int(args[i + 1]), laps > 0 {
+        if let laps = DebugFlags.int("-laps"), laps > 0 {
             lapsTotal = laps
         } else {
             switch track.definition.id {
@@ -126,7 +125,7 @@ final class RaceSession {
             o.progress += wrapped(Float(index - o.trackIndex) * track.step)
             o.trackIndex = index
             if floor(before / track.length) < floor(o.progress / track.length) && o.progress > 1 {
-                RaceSession.log.info("\(o.name, privacy: .public) lap \(Int(o.progress / self.track.length)) at \(self.raceTime)")
+                Log.race.info("\(o.name, privacy: .public) lap \(Int(o.progress / self.track.length)) at \(self.raceTime)")
             }
             if o.finishTime == nil && o.progress >= Float(lapsTotal) * track.length {
                 o.finishTime = raceTime
@@ -161,7 +160,6 @@ final class RaceSession {
         car.setOpacity(o.opacity)
     }
 
-    private static let log = Logger(subsystem: "com.example.RaceGame", category: "race")
 
     /// Позиция игрока (1 — лидер): кто финишировал раньше — выше, остальные — по пройденной дистанции.
     func playerPosition(playerProgress: Float, playerFinish: Double?) -> Int {

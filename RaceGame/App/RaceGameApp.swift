@@ -74,22 +74,18 @@ extension Screen {
     /// `-race` — в режиме гонки, `-screen select` — экран выбора трассы.
     /// `-race` / `-challenge` — режим для отладочного запуска.
     static var debugMode: GameMode {
-        let args = ProcessInfo.processInfo.arguments
-        return args.contains("-race") ? .race : args.contains("-challenge") ? .challenge : .training
+        DebugFlags.has("-race") ? .race : DebugFlags.has("-challenge") ? .challenge : .training
     }
 
     static var initial: Screen {
-        let args = ProcessInfo.processInfo.arguments
-        if let i = args.firstIndex(of: "-screen"), i + 1 < args.count {
-            if args[i + 1] == "select" { return .trackSelect }
-            if args[i + 1] == "mode" { return .modeSelect }
-            if args[i + 1] == "garage" { return .garage }
+        switch DebugFlags.value("-screen") {
+        case "select": return .trackSelect
+        case "mode": return .modeSelect
+        case "garage": return .garage
+        default: break
         }
-        guard args.contains("-autopilot") || args.contains("-track") else { return .menu }
-        let mode = debugMode
-        if let i = args.firstIndex(of: "-track"), i + 1 < args.count, let id = TrackID(rawValue: args[i + 1]) {
-            return .race(id, mode)
-        }
-        return .race(.harbor, mode)
+        guard DebugFlags.has("-autopilot") || DebugFlags.has("-track") else { return .menu }
+        let id = DebugFlags.value("-track").flatMap(TrackID.init(rawValue:)) ?? .harbor
+        return .race(id, debugMode)
     }
 }

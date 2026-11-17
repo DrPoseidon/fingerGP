@@ -64,7 +64,7 @@ final class MedalStore {
     }
 
     /// Для отладки: `-unlockAll` открывает все трассы.
-    private let unlockAll = ProcessInfo.processInfo.arguments.contains("-unlockAll")
+    private let unlockAll = DebugFlags.has("-unlockAll")
 
     func prepare() {
         guard runs.isEmpty else { return }

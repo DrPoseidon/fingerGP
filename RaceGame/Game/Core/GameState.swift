@@ -13,6 +13,8 @@ final class GameState {
     var offTrack = false
     var wrongWay = false
     var hasTouched = false
+    /// Пауза: игровой цикл стоит, звук приглушён, касания не принимаются.
+    var isPaused = false
     /// Машина давно стоит без пальца на экране — показать анимацию «веди пальцем».
     var showGestureHint = false
     /// Путь пальца подсказки — точки трассы впереди машины в координатах экрана.
@@ -85,6 +87,7 @@ final class GameState {
         offTrack = false
         wrongWay = false
         hasTouched = false
+        isPaused = false
         showGestureHint = false
         showHint = GameState.hintNeeded
         ghostPosition = nil

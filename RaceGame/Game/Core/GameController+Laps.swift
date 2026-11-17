@@ -16,7 +16,7 @@ extension GameController {
         }
 
         for event in events {
-            GameController.lapLog.info("\(String(describing: event), privacy: .public) lapTime=\(self.lapTimer.lapTime) offTrack=\(offTrack) fromCenter=\(self.track.distanceFromCenterline(self.follower.position))")
+            Log.laps.info("\(String(describing: event), privacy: .public) lapTime=\(self.lapTimer.lapTime) offTrack=\(offTrack) fromCenter=\(self.track.distanceFromCenterline(self.follower.position))")
             switch event {
             case .lapStarted:
                 recording = Ghost()
@@ -43,7 +43,6 @@ extension GameController {
         }
     }
 
-    static let lapLog = Logger(subsystem: "com.example.RaceGame", category: "laps")
 
     func finishLap(time: Double, splits: [Double]) {
         let id = track.definition.id

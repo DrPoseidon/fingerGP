@@ -50,9 +50,17 @@ final class RaceAudio {
     func stop() { keeper.stop() }
 
     /// Применить настройку «без звука» (её переключает кнопка на экране гонки).
+    /// Пауза: мотор замолкает, на продолжении звук возвращается.
+    func setPaused(_ paused: Bool) {
+        self.paused = paused
+        syncMute()
+    }
+
+    private var paused = false
+
     func syncMute() {
         keeper.tick()
-        let volume: Float = RaceAudio.isMuted ? 0 : 1
+        let volume: Float = RaceAudio.isMuted || paused ? 0 : 1
         if engine.mainMixerNode.outputVolume != volume { engine.mainMixerNode.outputVolume = volume }
     }
 

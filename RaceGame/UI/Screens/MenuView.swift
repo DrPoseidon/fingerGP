@@ -5,7 +5,7 @@ struct MenuView: View {
     let onGarage: () -> Void
     @State private var muted = RaceAudio.isMuted
     /// `-screen settings` — открыть меню сразу с настройками (для скриншотов).
-    @State private var showSettings = ProcessInfo.processInfo.arguments.contains("settings")
+    @State private var showSettings = DebugFlags.value("-screen") == "settings"
 
     var body: some View {
         VStack(spacing: 0) {
