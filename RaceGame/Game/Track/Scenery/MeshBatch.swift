@@ -13,14 +13,15 @@ struct MeshBatch {
 
     /// Четырёхугольник a-b-c-d (a — левый нижний, против часовой стрелки, если смотреть на лицевую сторону).
     /// `facing` — куда должна смотреть лицевая сторона; если обход оказался обратным, он разворачивается.
+    /// `uv` — сколько раз текстура укладывается по ширине и высоте (для повторяющихся окон фасада).
     mutating func quad(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>, _ d: SIMD3<Float>,
-                       facing: SIMD3<Float>? = nil) {
+                       facing: SIMD3<Float>? = nil, uv: SIMD2<Float> = [1, 1]) {
         var n = simd_cross(b - a, c - a)
         guard simd_length_squared(n) > 1e-12 else { return }
         n = simd_normalize(n)
         let base = UInt32(positions.count)
         positions += [a, b, c, d]
-        uvs += [SIMD2(0, 0), SIMD2(1, 0), SIMD2(1, 1), SIMD2(0, 1)]
+        uvs += [SIMD2(0, 0), SIMD2(uv.x, 0), uv, SIMD2(0, uv.y)]
         if let facing, simd_dot(n, facing) < 0 {
             normals += Array(repeating: -n, count: 4)
             indices += [0, 2, 1, 0, 3, 2].map { base + $0 }
@@ -50,18 +51,24 @@ struct MeshBatch {
     }
 
     /// Параллелепипед: центр, полуразмеры по осям `right`, `up`, `forward` (взаимно перпендикулярные единичные).
-    /// Нижняя грань не строится — её никогда не видно.
+    /// Нижняя грань не строится — её никогда не видно. `tile` — размер одной клетки текстуры на боковых
+    /// гранях в метрах (окна, рёбра контейнера); верх тогда берёт угол текстуры (стену без окна).
     mutating func box(center c: SIMD3<Float>, size: SIMD3<Float>,
-                      right r: SIMD3<Float> = [1, 0, 0], up u: SIMD3<Float> = [0, 1, 0], forward f: SIMD3<Float> = [0, 0, 1]) {
+                      right r: SIMD3<Float> = [1, 0, 0], up u: SIMD3<Float> = [0, 1, 0], forward f: SIMD3<Float> = [0, 0, 1],
+                      tile: SIMD2<Float>? = nil) {
         let h = size / 2
         let faces: [(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>)] = [
             (f * h.z, r * h.x, u * h.y), (-f * h.z, r * h.x, u * h.y),
             (r * h.x, f * h.z, u * h.y), (-r * h.x, f * h.z, u * h.y),
             (u * h.y, r * h.x, f * h.z),
         ]
-        for (n, s, t) in faces {
+        for (k, (n, s, t)) in faces.enumerated() {
             let o = c + n
-            quad(o - s - t, o + s - t, o + s + t, o - s + t, facing: n)
+            var uv: SIMD2<Float> = [1, 1]
+            if let tile {
+                uv = k == 4 ? [0, 0] : SIMD2(2 * simd_length(s) / tile.x, 2 * simd_length(t) / tile.y).rounded(.up)
+            }
+            quad(o - s - t, o + s - t, o + s + t, o - s + t, facing: n, uv: uv)
         }
     }
 

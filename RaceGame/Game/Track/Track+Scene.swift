@@ -10,7 +10,7 @@ extension Track {
 
         let grass = ModelEntity(
             mesh: .generatePlane(width: 4000, depth: 4000),
-            materials: [SimpleMaterial(color: UIColor(red: 0.36, green: 0.62, blue: 0.30, alpha: 1), roughness: 1, isMetallic: false)])
+            materials: [SimpleMaterial(color: definition.scenery.groundColor, roughness: 1, isMetallic: false)])
         root.addChild(grass)
 
         let asphalt = SimpleMaterial(color: UIColor(white: 0.28, alpha: 1), roughness: 0.9, isMetallic: false)
@@ -61,6 +61,7 @@ extension Track {
 
         let scenery = SceneryBuilder()
         addTrackside(scenery)
+        if definition.scenery == .city { addCity(scenery) }
         addTrees(scenery)
         scenery.build(into: root)
         return root
