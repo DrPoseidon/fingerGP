@@ -78,6 +78,9 @@ final class GameController: NSObject {
     private let audio = RaceAudio()
     private let haptics = RaceHaptics()
     private var wrongWayTimer: Float = 0
+    /// Сколько секунд машина стоит без пальца на экране; дольше `idleHintDelay` — подсказка жестом.
+    private var idleTime: Float = 0
+    private let idleHintDelay: Float = 3
 
     /// Старт с хода (настройка): машина сама разгоняется по осевой к линии старта, пока гаснут три красных огня.
     /// Огни привязаны к расстоянию до линии: за `greenDistance` метров (~3 с) загорается зелёный, и первое
@@ -368,6 +371,12 @@ final class GameController: NSObject {
             bannerTimer -= dt
             if bannerTimer <= 0 { state.banner = nil }
         }
+        let idle = finger == nil && follower.speed < 0.5 && runUp == nil && !resetting && !state.isLoading
+        idleTime = idle ? idleTime + dt : 0
+        let showHint = idleTime > idleHintDelay
+        if showHint && !state.showGestureHint { state.gestureHintPath = gestureHintPath() }
+        if state.showGestureHint != showHint { state.showGestureHint = showHint }
+
         if lightsTimer > 0 {
             lightsTimer -= dt
             if lightsTimer <= 0 { state.startLights = nil }
@@ -419,6 +428,15 @@ final class GameController: NSObject {
         if r.green && (autopilot || lightsTimer <= 0) {
             runUp = nil
             finger = nil
+        }
+    }
+
+    /// Жест подсказки: касание на трассе чуть впереди машины и проведение по ней вперёд, повторяя повороты.
+    private func gestureHintPath() -> [CGPoint] {
+        let s = track.nearestIndexDistance(follower.position)
+        return stride(from: Float(18), through: 115, by: 4).compactMap { d in
+            let p = track.frame(atDistance: s + d).position
+            return arView.project(SIMD3(p.x, 0, p.y))
         }
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import Observation
 
 /// Данные для HUD. Обновляется игровым циклом ~10 раз в секунду.
@@ -11,6 +12,10 @@ final class GameState {
     var offTrack = false
     var wrongWay = false
     var hasTouched = false
+    /// Машина давно стоит без пальца на экране — показать анимацию «веди пальцем».
+    var showGestureHint = false
+    /// Путь пальца подсказки — точки трассы впереди машины в координатах экрана.
+    var gestureHintPath: [CGPoint] = []
     /// Подсказку «Веди пальцем…» видят только в первых `hintRaces` гонках (гонка считается, если игрок коснулся экрана).
     private(set) var showHint = GameState.hintNeeded
     private static let hintRacesKey = "hint.racesWithTouch"
@@ -53,6 +58,7 @@ final class GameState {
         offTrack = false
         wrongWay = false
         hasTouched = false
+        showGestureHint = false
         showHint = GameState.hintNeeded
         ghostPosition = nil
         lapInvalid = false

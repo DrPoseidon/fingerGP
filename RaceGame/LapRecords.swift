@@ -32,6 +32,19 @@ enum LapRecords {
         defaults.set(true, forKey: flag)
     }
 
+    /// Разовая миграция: Монцу, Спа и Нордшляйфе заменили свои трассы — их статистику и призраков удаляем.
+    static func dropRemovedTracks() {
+        let flag = "migration.removedTracksDropped.v1"
+        guard !defaults.bool(forKey: flag) else { return }
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("ghosts", isDirectory: true)
+        for id in ["monza", "spa", "nordschleife"] {
+            for key in ["bestLap", "splits", "laps"] { defaults.removeObject(forKey: "\(key).\(id)") }
+            if let file = dir?.appendingPathComponent("\(id).bin") { try? FileManager.default.removeItem(at: file) }
+        }
+        defaults.set(true, forKey: flag)
+    }
+
     /// Сбросить статистику трассы (для отладки: аргумент запуска `-resetRecords`).
     static func reset(_ id: TrackID) {
         for key in ["bestLap", "splits", "laps"] { defaults.removeObject(forKey: "\(key).\(id.rawValue)") }

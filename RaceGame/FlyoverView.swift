@@ -13,7 +13,7 @@ struct FlyoverView: UIViewRepresentable {
 
 @MainActor
 final class FlyoverController {
-    private let order: [TrackID] = [.monza, .nordschleife, .spa, .oval]
+    private let order: [TrackID] = [.harbor, .forest, .pass, .oval]
     private var orderIndex = 0
     private var track: Track
     private var arView: ARView!
