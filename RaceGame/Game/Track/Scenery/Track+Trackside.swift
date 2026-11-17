@@ -41,9 +41,10 @@ extension Track {
         return (f * cos(tilt) + SIMD3(0, sin(tilt), 0), SIMD3(0, cos(tilt), 0) - f * sin(tilt))
     }
 
-    /// Свободна ли точка: дальше `margin` за поребриком от любого участка трассы и не занята.
+    /// Свободна ли точка: дальше `margin` за поребриком от любого участка трассы, не занята и не в воде.
     private func clear(_ p: SIMD2<Float>, margin: Float, radius: Float, _ builder: SceneryBuilder) -> Bool {
         approximateDistance(p) > halfWidth + curbWidth + margin && builder.isFree(p, radius: radius)
+            && p.y < (waterLine ?? .infinity) - radius - 4 * propScale
     }
 
     // MARK: - Арка

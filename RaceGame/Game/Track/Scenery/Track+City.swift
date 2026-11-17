@@ -8,11 +8,9 @@ import simd
 @MainActor
 extension Track {
     func addCity(_ builder: SceneryBuilder) {
-        let s = propScale
         let minP = points.reduce(SIMD2<Float>(repeating: .infinity)) { simd_min($0, $1) }
         let maxP = points.reduce(SIMD2<Float>(repeating: -.infinity)) { simd_max($0, $1) }
-        // Набережная — сразу за стартовой прямой (она у самого «южного» края трассы), чтобы вода была в кадре.
-        let quayZ = maxP.y + halfWidth + curbWidth + 16 * s
+        guard let quayZ = waterLine else { return }
         var rng = SeededRandom(seed: 0xC17)
 
         addWater(builder, quayZ: quayZ, from: minP.x - 600, to: maxP.x + 600)
@@ -21,6 +19,14 @@ extension Track {
         addPort(builder, from: maxP.y, quayZ: quayZ, minX: minP.x - 250, maxX: maxP.x + 250, rng: &rng)
         addBlocks(builder, min: minP - 260, max: SIMD2(maxP.x + 260, maxP.y), portZ: maxP.y, rng: &rng)
         addInfill(builder, min: minP - 60, max: SIMD2(maxP.x + 60, maxP.y), rng: &rng)
+    }
+
+    /// Линия набережной (z), за которой вода, — только в городе. Набережная сразу за стартовой прямой
+    /// (она у самого «южного» края трассы), чтобы вода была в кадре.
+    var waterLine: Float? {
+        guard definition.scenery == .city else { return nil }
+        let maxZ = points.map(\.y).max() ?? 0
+        return maxZ + halfWidth + curbWidth + 16 * propScale
     }
 
     private var propScale: Float { definition.carScale / 1.5 }
