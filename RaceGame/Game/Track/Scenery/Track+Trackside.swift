@@ -177,30 +177,61 @@ extension Track {
 
     // MARK: - Таблички торможения
 
-    /// Перед каждым заметным торможением (по профилю скорости соперников) — 150, 100 и 50 м
-    /// до конца торможения, с внешней стороны поворота.
+    /// Скорость, которую машина реально набирает: профиль соперников (сцепление и торможение)
+    /// плюс ограничение разгоном — после медленного поворота короткая прямая не даёт разогнаться.
+    private func reachableSpeeds() -> [Float] {
+        var v = SpeedProfile.standard(for: self).speeds
+        let car = CarFollower(position: .zero, heading: 0)
+        let n = v.count
+        for _ in 0..<2 {
+            for i in 0..<n {
+                let u = v[i], ratio = u / car.maxSpeed
+                let accel = car.engineAccel * (1 - ratio * ratio)
+                v[(i + 1) % n] = min(v[(i + 1) % n], (u * u + 2 * accel * step).squareRoot())
+            }
+        }
+        return v
+    }
+
+    /// Таблички 150, 100 и 50 м до поворота — только там, где после длинного быстрого участка
+    /// (прямая или пологая дуга) нужно сильно тормозить. Поворот — конец торможения; таблички стоят
+    /// с его внешней стороны и ставятся либо все три, либо ни одной.
     private func addBrakeMarkers(_ builder: SceneryBuilder, curvature: [Float]) {
         let s = propScale
-        let profile = SpeedProfile.standard(for: self).speeds
+        let v = reachableSpeeds()
         let n = points.count
-        var i = 0
-        while i < n {
-            guard profile[(i + 1) % n] < profile[i] - 0.001 else { i += 1; continue }
-            let start = i
-            while profile[(i + 1) % n] < profile[i % n] - 0.001 && i < start + n { i += 1 }
-            let end = i % n
-            guard profile[start] - profile[end] > 15 else { continue }
-            let turn = curvature[(end + Int(20 / step)) % n]
-            let side: Float = turn > 0 ? -1 : 1
-            for meters in [150, 100, 50] {
-                let k = ((end - Int(Float(meters) / step)) % n + n) % n
-                let t = tangents[k], nrm = normals[k] * side
-                let foot = points[k] + nrm * (halfWidth + curbWidth + 2.5 * s)
-                guard clear(foot, margin: 1, radius: 0, builder) else { continue }
+        let at = { (i: Int) in ((i % n) + n) % n }
+        let braking = { (i: Int) in v[at(i + 1)] < v[at(i)] - 0.001 }
+        // Начинаем обход с точки вне торможения, чтобы зона на стыке круга не разрезалась надвое.
+        guard let origin = (0..<n).first(where: { !braking($0) }) else { return }
+        let approach = Int(160 / step)
+        var k = 0
+        while k < n {
+            let begin = origin + k
+            guard braking(begin) else { k += 1; continue }
+            var end = begin
+            while braking(end) && end - begin < n { end += 1 }
+            k = end - origin
+            // Разогнались выше 230 км/ч и сбрасываем больше 80 км/ч; на всех 160 м до поворота —
+            // прямая или пологая дуга (радиус больше 200 м), без предыдущего поворота.
+            let top = v[at(begin)], bottom = v[at(end)]
+            guard top > 230 / 3.6, top - bottom > 80 / 3.6,
+                  (0..<approach).allSatisfy({ i in
+                      let j = end - approach + i
+                      return j >= begin || abs(curvature[at(j)]) < 1 / 200
+                  }) else { continue }
+            let side: Float = curvature[at(end + Int(20 / step))] > 0 ? -1 : 1
+            let spots = [150, 100, 50].map { meters -> (Int, SIMD2<Float>) in
+                let i = at(end - Int(Float(meters) / step))
+                return (meters, points[i] + normals[i] * side * (halfWidth + curbWidth + 2.5 * s))
+            }
+            guard spots.allSatisfy({ clear($0.1, margin: 1, radius: 2 * s, builder) }) else { continue }
+            for (meters, foot) in spots {
+                let i = at(end - Int(Float(meters) / step))
                 builder.reserve(foot, radius: 3 * s)
                 let creative = AdContent.distanceMarker(meters)
                 builder.material(creative.id) { creative.material }
-                let (normal, up) = tilted(-t, tilt: 0.35)
+                let (normal, up) = tilted(-tangents[i], tilt: 0.35)
                 let w = 3.6 * s, h = 2.4 * s
                 let center = ground(foot, 1.2 * s) + up * (h / 2)
                 builder.add("post", at: foot) { $0.prism(base: ground(foot), radius: 0.15 * s, height: 1.2 * s + h * 0.5, sides: 5) }
