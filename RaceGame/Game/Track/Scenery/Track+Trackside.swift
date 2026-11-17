@@ -52,7 +52,7 @@ extension Track {
         let s = propScale
         let p = points[0], t = tangents[0], nrm = normals[0]
         let span = halfWidth + curbWidth + 1.5 * s
-        let height = 7 * s, beam = SIMD3<Float>(2 * span + 1.2 * s, 2.4 * s, 1.2 * s)
+        let height = 7 * s, beam = SIMD3<Float>(2 * span + 1.2 * s, 3 * s, 1.2 * s)
         let right = SIMD3(nrm.x, 0, nrm.y), forward = SIMD3(t.x, 0, t.y)
         for side: Float in [-1, 1] {
             let foot = p + nrm * span * side
@@ -63,14 +63,14 @@ extension Track {
         }
         let top = ground(p, height + beam.y / 2)
         builder.add("frame", at: p) { $0.box(center: top, size: beam, right: right, forward: forward) }
-        // Реклама с обеих сторон перекладины, слегка наклонена к камере.
+        // Реклама с обеих сторон перекладины, вровень с её гранью.
         for (index, dir) in [(0, -t), (1, t)] {
             let creative = AdContent.creative(for: AdSlot(id: "\(definition.id.rawValue).arch.\(index)", format: .arch, index: index))
             builder.material(creative.id) { creative.material }
-            let (normal, up) = tilted(dir, tilt: 0.35)
+            let (normal, up) = tilted(dir, tilt: 0)
             let center = top + SIMD3(dir.x, 0, dir.y) * (beam.z / 2 + 0.05)
             builder.add(creative.id, at: p) {
-                $0.panel(center: center, normal: normal, up: up, width: beam.x - 0.6 * s, height: beam.y * 1.05)
+                $0.panel(center: center, normal: normal, up: up, width: beam.x - 0.6 * s, height: beam.y * 0.85)
             }
         }
     }
