@@ -6,6 +6,7 @@ struct RaceGameApp: App {
     init() {
         LapRecords.dropLegacyRecords()
         LapRecords.dropRemovedTracks()
+        LapRecords.seedChallengeRecords()
         MedalStore.shared.prepare()
         // Модель машины грузится сразу при запуске, параллельно с показом меню.
         Task { @MainActor in _ = try? await CarEntity.load(scale: 1) }
@@ -19,14 +20,14 @@ struct RaceGameApp: App {
 }
 
 enum Screen: Equatable {
-    case menu, modeSelect, trackSelect
+    case menu, modeSelect, trackSelect, garage
     case race(TrackID, GameMode)
 }
 
 struct RootView: View {
     @State private var screen: Screen = Screen.initial
     /// Режим, выбранный на экране режимов, — с ним открывается выбранная трасса.
-    @State private var mode: GameMode = ProcessInfo.processInfo.arguments.contains("-race") ? .race : .training
+    @State private var mode: GameMode = Screen.debugMode
 
     var body: some View {
         ZStack {
@@ -38,7 +39,8 @@ struct RootView: View {
                     .overlay(LinearGradient(colors: [.black.opacity(0.45), .clear, .black.opacity(0.55)],
                                             startPoint: .top, endPoint: .bottom).ignoresSafeArea())
                 if screen == .menu {
-                    MenuView { withAnimation(.easeInOut(duration: 0.3)) { screen = .modeSelect } }
+                    MenuView(onPlay: { withAnimation(.easeInOut(duration: 0.3)) { screen = .modeSelect } },
+                             onGarage: { withAnimation(.easeInOut(duration: 0.3)) { screen = .garage } })
                         .transition(.opacity)
                 } else if screen == .modeSelect {
                     ModeSelectView(
@@ -50,12 +52,16 @@ struct RootView: View {
                         .transition(.opacity)
                 } else {
                     TrackSelectView(
+                        mode: mode,
                         onBack: { withAnimation(.easeInOut(duration: 0.3)) { screen = .modeSelect } },
                         onSelect: { screen = .race($0, mode) })
                         .transition(.opacity)
                 }
             case .race(let id, let mode):
                 RaceView(track: TrackDefinition.get(id), mode: mode) { screen = .menu }
+            case .garage:
+                GarageView { withAnimation(.easeInOut(duration: 0.3)) { screen = .menu } }
+                    .transition(.opacity)
             }
         }
         .statusBarHidden()
@@ -66,14 +72,21 @@ struct RootView: View {
 extension Screen {
     /// Для отладки: `-autopilot` или `-track <id>` сразу открывают заезд (по умолчанию — Гавань),
     /// `-race` — в режиме гонки, `-screen select` — экран выбора трассы.
+    /// `-race` / `-challenge` — режим для отладочного запуска.
+    static var debugMode: GameMode {
+        let args = ProcessInfo.processInfo.arguments
+        return args.contains("-race") ? .race : args.contains("-challenge") ? .challenge : .training
+    }
+
     static var initial: Screen {
         let args = ProcessInfo.processInfo.arguments
         if let i = args.firstIndex(of: "-screen"), i + 1 < args.count {
             if args[i + 1] == "select" { return .trackSelect }
             if args[i + 1] == "mode" { return .modeSelect }
+            if args[i + 1] == "garage" { return .garage }
         }
         guard args.contains("-autopilot") || args.contains("-track") else { return .menu }
-        let mode: GameMode = args.contains("-race") ? .race : .training
+        let mode = debugMode
         if let i = args.firstIndex(of: "-track"), i + 1 < args.count, let id = TrackID(rawValue: args[i + 1]) {
             return .race(id, mode)
         }
@@ -85,6 +98,7 @@ extension Screen {
 
 struct MenuView: View {
     let onPlay: () -> Void
+    let onGarage: () -> Void
     @State private var muted = RaceAudio.isMuted
     /// `-screen settings` — открыть меню сразу с настройками (для скриншотов).
     @State private var showSettings = ProcessInfo.processInfo.arguments.contains("settings")
@@ -115,9 +129,23 @@ struct MenuView: View {
                     .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
             }
             .buttonStyle(.plain)
-            Spacer().frame(height: 110)
+            Button(action: onGarage) {
+                Label("Гараж", systemImage: "car.fill")
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: 280)
+                    .padding(.vertical, 13)
+                    .background(.black.opacity(0.45), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 12)
+            Spacer().frame(height: 60)
         }
         .padding(.horizontal, 24)
+        .overlay(alignment: .topLeading) {
+            CoinBalance(coins: Wallet.shared.coins)
+                .padding(.leading, 16)
+        }
         .overlay(alignment: .topTrailing) {
             HStack(spacing: 10) {
                 CircleButton(systemName: "gearshape.fill") { showSettings = true }
@@ -261,7 +289,13 @@ struct ModeSelectView: View {
             Spacer()
             Button { onSelect(.training) } label: {
                 ModeCard(icon: "stopwatch", title: "Тренировка",
-                         subtitle: "Свободные круги в одиночку — оттачивай траекторию и ставь рекорды")
+                         subtitle: "Свободные круги: свой призрак и своё время — улучшай рекорд")
+            }
+            .buttonStyle(.plain)
+            Button { onSelect(.challenge) } label: {
+                ModeCard(icon: "medal.fill", title: "Испытание",
+                         subtitle: "Бронза, серебро и золото за время круга — медали открывают трассы",
+                         color: Color(red: 0.9, green: 0.62, blue: 0.08))
             }
             .buttonStyle(.plain)
             Button { onSelect(.race) } label: {
@@ -326,6 +360,7 @@ struct ModeCard: View {
 // MARK: - Выбор трассы
 
 struct TrackSelectView: View {
+    let mode: GameMode
     let onBack: () -> Void
     let onSelect: (TrackID) -> Void
 
@@ -343,7 +378,7 @@ struct TrackSelectView: View {
                 VStack(spacing: 14) {
                     ForEach(TrackDefinition.all, id: \.id) { def in
                         let unlocked = MedalStore.shared.isUnlocked(def.id)
-                        Button { onSelect(def.id) } label: { TrackCard(definition: def, unlocked: unlocked) }
+                        Button { onSelect(def.id) } label: { TrackCard(definition: def, mode: mode, unlocked: unlocked) }
                             .buttonStyle(.plain)
                             .disabled(!unlocked)
                     }
@@ -358,6 +393,8 @@ struct TrackSelectView: View {
 
 struct TrackCard: View {
     let definition: TrackDefinition
+    /// Что показывать: в тренировке — свой рекорд, в испытании — медали, в гонке — лучшее место.
+    let mode: GameMode
     var unlocked = true
 
     var body: some View {
@@ -377,8 +414,19 @@ struct TrackCard: View {
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 10) {
                     Text(String(format: "%.2f км", preview.length / 1000))
-                    if let best = LapRecords.bestLap(definition.id) {
-                        Label(formatLapTime(best), systemImage: "stopwatch")
+                    switch mode {
+                    case .training:
+                        if let best = LapRecords.bestLap(definition.id) {
+                            Label(formatLapTime(best), systemImage: "stopwatch")
+                        }
+                    case .challenge:
+                        if let best = LapRecords.challengeBest(definition.id) {
+                            Label(formatLapTime(best), systemImage: "stopwatch")
+                        }
+                    case .race:
+                        if let place = LapRecords.racePlace(definition.id) {
+                            Label("лучшее место: \(place)", systemImage: "trophy.fill")
+                        }
                     }
                 }
                 .lineLimit(1)
@@ -386,7 +434,7 @@ struct TrackCard: View {
                 .font(.system(size: 13, weight: .semibold, design: .monospaced))
                 .opacity(0.7)
                 let store = MedalStore.shared
-                if unlocked {
+                if unlocked && mode == .challenge {
                     // Медальные времена: полученные — яркие, остальные — приглушённые.
                     let earned = store.earned(on: definition.id)
                     HStack(spacing: 8) {
@@ -404,7 +452,7 @@ struct TrackCard: View {
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .lineLimit(1)
                     .fixedSize()
-                } else {
+                } else if !unlocked {
                     // Очки медалей: бронза — 1, серебро — 2, золото — 3.
                     Label("Медали: \(store.points)/\(MedalStore.requiredPoints(definition.id)) — бронза 1, серебро 2, золото 3",
                           systemImage: "medal.fill")
@@ -540,7 +588,7 @@ struct RaceView: View {
         }
         .overlay {
             if let results = state.raceResults {
-                RaceResultsView(results: results, bestLap: state.bestLap,
+                RaceResultsView(results: results, bestLap: state.bestLap, reward: state.raceReward,
                                 onRestart: { restartToken += 1 }, onExit: onExit)
                     .transition(.opacity)
             }
@@ -554,6 +602,7 @@ struct RaceView: View {
 struct RaceResultsView: View {
     let results: [RaceResult]
     let bestLap: Double?
+    let reward: Int
     let onRestart: () -> Void
     let onExit: () -> Void
 
@@ -592,6 +641,9 @@ struct RaceResultsView: View {
                     Text("Лучший круг: \(formatLapTime(bestLap))")
                         .font(.system(size: 14, weight: .semibold, design: .monospaced))
                         .opacity(0.8)
+                }
+                if reward > 0 {
+                    CoinBalance(coins: reward, plus: true)
                 }
                 HStack(spacing: 12) {
                     Button(action: onExit) {
@@ -737,6 +789,11 @@ struct HUDView: View {
                 .padding(.top, 12)
                 .transition(.scale(scale: 0.8).combined(with: .opacity))
             }
+            if let coins = state.coinToast {
+                CoinBalance(coins: coins, plus: true)
+                    .padding(.top, 10)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
             // Подсказка — в верхней части экрана: внизу стоит машина (камера смотрит вперёд) и мини-карта.
             if state.showHint && !state.hasTouched && (state.startLights == nil || state.startLights == .green) {
                 Text("Веди пальцем по трассе — машина поедет следом.\nБыстрее палец — быстрее машина.")
@@ -763,6 +820,7 @@ struct HUDView: View {
         }
         .animation(.easeOut(duration: 0.25), value: state.wrongWay)
         .animation(.easeOut(duration: 0.25), value: state.banner)
+        .animation(.spring(duration: 0.35), value: state.coinToast)
     }
 }
 

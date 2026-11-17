@@ -54,6 +54,10 @@ final class GameState {
     /// Средний FPS и самый долгий кадр (мс) за последние полсекунды; nil — счётчик выключен.
     var fps: (average: Double, worstMs: Double)?
 
+    /// Сколько монет только что заработано (всплывает в HUD).
+    var coinToast: Int?
+    /// Награда за гонку — в итоговой таблице.
+    var raceReward = 0
     /// Следующая медаль-цель в тренировке и её время.
     var medalTarget: (medal: Medal, time: Double)?
     /// Призрак-цель на мини-карте.
@@ -93,6 +97,8 @@ final class GameState {
         racePosition = RaceSession.carCount
         raceTime = 0
         raceResults = nil
+        coinToast = nil
+        raceReward = 0
         draft = 0
         opponents = []
     }

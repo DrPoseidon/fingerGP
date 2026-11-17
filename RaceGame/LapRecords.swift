@@ -47,8 +47,33 @@ enum LapRecords {
 
     /// Сбросить статистику трассы (для отладки: аргумент запуска `-resetRecords`).
     static func reset(_ id: TrackID) {
-        for key in ["bestLap", "splits", "laps", "racePlace"] { defaults.removeObject(forKey: "\(key).\(id.rawValue)") }
+        for key in ["bestLap", "splits", "laps", "racePlace", "challengeBest"] { defaults.removeObject(forKey: "\(key).\(id.rawValue)") }
         Ghost.delete(for: id)
+    }
+
+    /// Лучший круг в «Испытании» — по нему выдаются медали.
+    static func challengeBest(_ id: TrackID) -> Double? {
+        let value = defaults.double(forKey: "challengeBest.\(id.rawValue)")
+        return value > 0 ? value : nil
+    }
+
+    /// Засчитать круг «Испытания». Возвращает true, если это новый лучший.
+    @discardableResult
+    static func recordChallengeLap(_ id: TrackID, time: Double) -> Bool {
+        guard time < challengeBest(id) ?? .infinity else { return false }
+        defaults.set(time, forKey: "challengeBest.\(id.rawValue)")
+        return true
+    }
+
+    /// Разовая миграция: медали раньше считались по рекорду тренировки — переносим его в «Испытание»,
+    /// чтобы уже полученные медали не пропали.
+    static func seedChallengeRecords() {
+        let flag = "migration.challengeSeeded.v1"
+        guard !defaults.bool(forKey: flag) else { return }
+        for id in TrackID.allCases {
+            if let best = bestLap(id), challengeBest(id) == nil { defaults.set(best, forKey: "challengeBest.\(id.rawValue)") }
+        }
+        defaults.set(true, forKey: flag)
     }
 
     /// Лучшее место в гонке на трассе (1 — победа), nil — гонок не было.

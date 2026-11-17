@@ -5,7 +5,11 @@ import simd
 
 /// Режим заезда.
 enum GameMode: Equatable {
+    /// Свободные круги: свой призрак, своё время.
     case training
+    /// Испытание: бронза, серебро и золото за время круга, призрак-цель.
+    case challenge
+    /// Гонка против соперников.
     case race
 }
 
@@ -184,7 +188,7 @@ final class RaceSession {
     /// Загрузить машины соперников (каждая в своей ливрее) и добавить в сцену.
     func loadCars(into anchor: Entity) async {
         for i in opponents.indices where opponents[i].car == nil {
-            guard let car = try? await CarEntity.load(scale: track.definition.carScale, livery: opponents[i].color)
+            guard let car = try? await CarEntity.load(scale: track.definition.carScale, primary: opponents[i].color)
             else { continue }
             opponents[i].car = car
             anchor.addChild(car.root)

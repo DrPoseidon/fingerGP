@@ -36,9 +36,10 @@ enum Medal: Int, CaseIterable, Comparable, Identifiable {
     }
 }
 
-/// Медальный круг: время и запись для призрака-цели.
+/// Медальный круг: время, время на отсечках секторов и запись для призрака-цели.
 struct MedalRun {
     let time: Double
+    let splits: [Double]
     let ghost: Ghost
 }
 
@@ -90,10 +91,10 @@ final class MedalStore {
         return Medal.allCases.reversed().first { m in time(m, on: id).map { lap <= $0 } ?? false }
     }
 
-    /// Медаль по рекорду трассы.
+    /// Медаль по лучшему кругу «Испытания».
     func earned(on id: TrackID) -> Medal? {
         _ = revision
-        return medal(for: LapRecords.bestLap(id), on: id)
+        return medal(for: LapRecords.challengeBest(id), on: id)
     }
 
     /// Следующая цель: медаль на ступень выше заработанной (nil — золото уже есть или времена не готовы).
@@ -122,6 +123,10 @@ final class MedalStore {
         let dt: Float = 1.0 / 60
         var lapTime: Double?
         var samples: [SIMD4<Float>] = []
+        var splits: [Double] = []
+        // Отсечки — там же, где у LapTimer: на n·k/3 точках осевой.
+        let n = track.points.count
+        let boundaries = (1..<LapTimer.sectorCount).map { Float(n * $0 / LapTimer.sectorCount) * track.step }
         for _ in 0..<(60 * 600) {
             finger.step(dt: dt, carProgress: progress, carSpeed: car.speed,
                         target: profile.speed(atDistance: finger.distance) * skill)
@@ -142,7 +147,8 @@ final class MedalStore {
             while Double(samples.count) * Ghost.interval <= t {
                 samples.append(SIMD4(car.position.x, car.position.y, car.heading, car.speed))
             }
-            if progress >= track.length { return MedalRun(time: t, ghost: Ghost(samples: samples)) }
+            if splits.count < boundaries.count, progress >= boundaries[splits.count] { splits.append(t) }
+            if progress >= track.length { return MedalRun(time: t, splits: splits, ghost: Ghost(samples: samples)) }
         }
         return nil
     }

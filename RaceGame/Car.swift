@@ -24,15 +24,19 @@ final class CarEntity {
     @MainActor private static var templateTask: Task<Entity, Error>?
 
     /// Модель грузится асинхронно один раз, дальше — клонируется.
-    /// `livery` — цвет вместо красного (кузов, понтоны, шлем) — для машин соперников.
+    /// `primary` — цвет вместо красного (кузов, понтоны, шлем), `secondary` — вместо белого (бока, крылья),
+    /// `accent` — вместо синего (воздухозаборник, зеркала, закрылки); `model` — машина из гаража (размер крыльев).
     @MainActor
-    static func load(scale: Float, livery: UIColor? = nil) async throws -> CarEntity {
+    static func load(scale: Float, primary: UIColor? = nil, secondary: UIColor? = nil, accent: UIColor? = nil,
+                     model carModel: CarModel = .standard) async throws -> CarEntity {
         let task = templateTask ?? Task { try await Entity(named: "race_car") }
         templateTask = task
         do {
             let template = try await task.value
             let model = template.clone(recursive: true)
-            if let livery { recolor(model, to: livery) }
+            recolor(model, primary: primary, secondary: secondary, accent: accent)
+            scaleParts(of: model, prefix: "fw_", by: carModel.frontWing)
+            scaleParts(of: model, prefix: "rw_", by: carModel.rearWing)
             return CarEntity(model: model, scale: scale)
         } catch {
             templateTask = nil
@@ -40,23 +44,50 @@ final class CarEntity {
         }
     }
 
-    /// Заменить красный материал ливреи на другой цвет (материалы у клона свои, шаблон не меняется).
+    /// Перекрасить ливрею: красный материал — в `primary`, белый — в `secondary`, синий — в `accent`
+    /// (материалы у клона свои, шаблон не меняется).
     @MainActor
-    private static func recolor(_ entity: Entity, to color: UIColor) {
+    private static func recolor(_ entity: Entity, primary: UIColor?, secondary: UIColor?, accent: UIColor?) {
+        guard primary != nil || secondary != nil || accent != nil else { return }
         if var model = entity.components[ModelComponent.self] {
             var changed = false
             model.materials = model.materials.map { material in
-                guard var pbr = material as? PhysicallyBasedMaterial else { return material }
-                // Цвет из USD — в линейном RGB, getRed для него не срабатывает: компоненты читаются напрямую.
-                guard let c = pbr.baseColor.tint.cgColor.components, c.count >= 3,
-                      c[0] > 0.45, c[1] < 0.3, c[2] < 0.3 else { return material }
+                guard var pbr = material as? PhysicallyBasedMaterial,
+                      // Цвет из USD — в линейном RGB, getRed для него не срабатывает: компоненты читаются напрямую.
+                      let c = pbr.baseColor.tint.cgColor.components, c.count >= 3 else { return material }
+                let isRed = c[0] > 0.45 && c[1] < 0.3 && c[2] < 0.3
+                let isNavy = c[2] > 0.5 && c[0] < 0.3 && c[1] < 0.35
+                let isWhite = c[0] > 0.85 && c[1] > 0.85 && c[2] > 0.85
+                guard let color = isRed ? primary : isWhite ? secondary : isNavy ? accent : nil else { return material }
                 pbr.baseColor.tint = color
                 changed = true
                 return pbr
             }
             if changed { entity.components.set(model) }
         }
-        for child in entity.children { recolor(child, to: color) }
+        for child in entity.children { recolor(child, primary: primary, secondary: secondary, accent: accent) }
+    }
+
+    /// Увеличить или уменьшить группу деталей (например, все части заднего крыла) вокруг её центра.
+    @MainActor
+    private static func scaleParts(of model: Entity, prefix: String, by factor: Float) {
+        guard abs(factor - 1) > 0.01 else { return }
+        var parts: [Entity] = []
+        func collect(_ e: Entity) {
+            if e.name.hasPrefix(prefix) { parts.append(e) }
+            for child in e.children { collect(child) }
+        }
+        collect(model)
+        guard let parent = parts.first?.parent else { return }
+        let bounds = parts.map { $0.visualBounds(relativeTo: parent) }
+        let lo = bounds.map(\.min).reduce(SIMD3<Float>(repeating: .infinity)) { simd_min($0, $1) }
+        let hi = bounds.map(\.max).reduce(SIMD3<Float>(repeating: -.infinity)) { simd_max($0, $1) }
+        // Крыло растёт вверх и в стороны от своего основания, а не от центра: не уходит под кузов.
+        let pivot = SIMD3((lo.x + hi.x) / 2, lo.y, (lo.z + hi.z) / 2)
+        for part in parts {
+            part.scale *= factor
+            part.position = pivot + (part.position - pivot) * factor
+        }
     }
 
     private init(model: Entity, scale: Float) {
@@ -250,10 +281,10 @@ struct CarFollower {
     let smoothRadius = 10               // точек (×pointSpacing = 5 м) в каждую сторону для сглаживания следа
 
     // Физика.
-    let maxSpeed: Float = 350 / 3.6     // м/с
-    let engineAccel: Float = 24         // м/с² на нулевой скорости, падает до 0 к maxSpeed
+    private(set) var maxSpeed: Float = 350 / 3.6     // м/с
+    private(set) var engineAccel: Float = 24         // м/с² на нулевой скорости, падает до 0 к maxSpeed
     let brakeDecel: Float = 45          // м/с²
-    let grip: Float = 35                // м/с² — предельное боковое ускорение на асфальте (~3.5g)
+    private(set) var grip: Float = 35                // м/с² — предельное боковое ускорение на асфальте (~3.5g)
     let grassGrip: Float = 12           // м/с² — на траве
     let grassDrag: Float = 25           // м/с² — дополнительное замедление на траве
     let grassMaxSpeed: Float = 20       // м/с — выше этой скорости трава тормозит
@@ -261,10 +292,14 @@ struct CarFollower {
     let wheelbase: Float = 2.34
     let maxSteer: Float = 0.4           // рад — максимальный угол поворота колёс
 
-    init(position: SIMD2<Float>, heading: Float) {
+    /// `model` — машина из гаража: множители к разгону, максимальной скорости и сцеплению.
+    init(position: SIMD2<Float>, heading: Float, model: CarModel = .standard) {
         self.position = position
         self.heading = heading
         self.course = heading
+        maxSpeed *= model.topSpeed
+        engineAccel *= model.acceleration
+        grip *= model.grip
     }
 
     /// Сразу задать скорость — для старта с хода.

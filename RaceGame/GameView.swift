@@ -57,6 +57,11 @@ final class GameController: NSObject {
     private var lastTouchLocation: CGPoint = .zero
     private var lapTimer: LapTimer
 
+    /// Машина и ливрея из гаража.
+    private let carModel = Wallet.shared.car
+    private let livery = Wallet.shared.livery
+    private var coinTimer: Float = 0
+
     // Гонка против соперников (режим «Гонка»).
     private let mode: GameMode
     private let session: RaceSession?
@@ -163,10 +168,10 @@ final class GameController: NSObject {
         track = Track(definition)
         session = mode == .race ? RaceSession(track: track) : nil
         let start = GameController.spawnPose(track, session: session)
-        follower = CarFollower(position: start.position, heading: start.heading)
+        follower = CarFollower(position: start.position, heading: start.heading, model: carModel)
         lapTimer = LapTimer(pointCount: track.points.count, startProgress: track.nearestIndex(start.position))
         // В гонке круг не аннулируется выездами — засчитывается, если пройдены все отсечки.
-        lapTimer.invalidatesOnOffTrack = mode == .training && GameController.invalidatesOnOffTrack
+        lapTimer.invalidatesOnOffTrack = mode != .race && GameController.invalidatesOnOffTrack
         lastOnTrackDistance = track.nearestIndexDistance(start.position)
         if ProcessInfo.processInfo.arguments.contains("-resetRecords") { LapRecords.reset(definition.id) }
         if mode == .training {
@@ -231,7 +236,10 @@ final class GameController: NSObject {
         let carScale = track.definition.carScale
         Task { @MainActor [weak self] in
             do {
-                let car = try await CarEntity.load(scale: carScale)
+                let car = try await CarEntity.load(scale: carScale, primary: self?.livery.primary,
+                                                   secondary: self?.livery.secondary,
+                                                   accent: self?.livery.accent,
+                                                   model: self?.carModel ?? .standard)
                 guard let self else { return }
                 self.car = car
                 anchor.addChild(car.root)
@@ -291,10 +299,10 @@ final class GameController: NSObject {
         guard token != restartToken else { return }
         restartToken = token
         let start = GameController.spawnPose(track, session: session)
-        follower = CarFollower(position: start.position, heading: start.heading)
+        follower = CarFollower(position: start.position, heading: start.heading, model: carModel)
         finger = nil
         lapTimer = LapTimer(pointCount: track.points.count, startProgress: track.nearestIndex(start.position))
-        lapTimer.invalidatesOnOffTrack = mode == .training && GameController.invalidatesOnOffTrack
+        lapTimer.invalidatesOnOffTrack = mode != .race && GameController.invalidatesOnOffTrack
         session?.reset()
         lastOnTrackDistance = track.nearestIndexDistance(start.position)
         offTrackStreak = 0
@@ -468,6 +476,10 @@ final class GameController: NSObject {
         if showHint && !state.showGestureHint { state.gestureHintPath = gestureHintPath() }
         if state.showGestureHint != showHint { state.showGestureHint = showHint }
 
+        if coinTimer > 0 {
+            coinTimer -= dt
+            if coinTimer <= 0 { state.coinToast = nil }
+        }
         if lightsTimer > 0 {
             lightsTimer -= dt
             if lightsTimer <= 0 { state.startLights = nil }
@@ -639,7 +651,7 @@ final class GameController: NSObject {
     /// Зачёт круга, сектора и запись круга для призрака.
     private func updateLaps(dt: Float, offTrack: Bool) {
         let events = lapTimer.update(progress: track.nearestIndex(follower.position), offTrack: offTrack, dt: Double(dt))
-        if lapTimer.isRunning && !isRace {
+        if lapTimer.isRunning && mode == .training {
             // Запись положения 20 раз в секунду (по времени круга).
             while Double(recording.samples.count) * Ghost.interval <= lapTimer.lapTime {
                 recording.samples.append(SIMD4(follower.position.x, follower.position.y, follower.heading, follower.speed))
@@ -663,6 +675,8 @@ final class GameController: NSObject {
             case .lapFinished(let time, let splits, let valid):
                 if isRace {
                     finishRaceLap(time: time, valid: valid)
+                } else if valid && mode == .challenge {
+                    finishChallengeLap(time: time)
                 } else if valid {
                     finishLap(time: time, splits: splits)
                 } else {
@@ -744,6 +758,9 @@ final class GameController: NSObject {
         state.racePosition = place
         state.raceResults = results
         LapRecords.recordRacePlace(track.definition.id, place: place)
+        let coins = Rewards.race(place: place, on: track.definition.id)
+        Wallet.shared.earn(coins)
+        state.raceReward = coins
         MedalStore.shared.recordsChanged()
         audio.play(place == 1 ? .record : .lap)
         haptics.lap(record: place == 1)
@@ -779,36 +796,60 @@ final class GameController: NSObject {
         state.bestLap = min(state.bestLap ?? .infinity, time)
         if let previousBest { showDelta(time - previousBest, label: "Круг") }
 
-        let store = MedalStore.shared
-        let oldMedal = store.earned(on: id)
         let isRecord = LapRecords.recordLap(id, time: time, splits: splits, ghost: recording)
         if isRecord {
             ghost = recording
             bestSplits = splits
-            store.recordsChanged()
+            MedalStore.shared.recordsChanged()
         }
-        let newMedal = store.earned(on: id)
-        // Первый круг на трассе — просто круг; рекорд — когда побит прежний. Медаль важнее рекорда.
-        let celebrate = isRecord && (previousBest != nil || newMedal != nil)
-        if let newMedal, newMedal > oldMedal ?? .bronze || oldMedal == nil {
-            showBanner("\(newMedal.title)!", good: true, icon: "medal.fill")
-            updateMedalTarget()
-        } else if celebrate {
+        // Первый круг на трассе — просто круг; рекорд — когда побит прежний. Монеты — за улучшение рекорда.
+        let celebrate = isRecord && previousBest != nil
+        if celebrate {
             showBanner("Новый рекорд!", good: true)
+            Wallet.shared.earn(Rewards.record)
+            showCoins(Rewards.record)
         }
         audio.play(celebrate ? .record : .lap)
         haptics.lap(record: celebrate)
     }
 
+    /// Круг «Испытания»: сравнение с временем медали-цели, медали и монеты за них.
+    private func finishChallengeLap(time: Double) {
+        let id = track.definition.id
+        let store = MedalStore.shared
+        state.laps += 1
+        state.bestLap = min(state.bestLap ?? .infinity, time)
+        if let target = medalRun { showDelta(time - target.time, label: "Цель") }
+
+        let oldMedal = store.earned(on: id)
+        let isBest = LapRecords.recordChallengeLap(id, time: time)
+        if isBest { store.recordsChanged() }
+        let newMedal = store.earned(on: id)
+        if let newMedal, oldMedal.map({ newMedal > $0 }) ?? true {
+            showBanner("\(newMedal.title)!", good: true, icon: "medal.fill")
+            let coins = Rewards.medal(newMedal, on: id)
+            Wallet.shared.earn(coins)
+            showCoins(coins)
+            updateMedalTarget()
+            audio.play(.record)
+            haptics.lap(record: true)
+        } else {
+            audio.play(.lap)
+            haptics.lap(record: false)
+        }
+    }
+
     /// Цель — следующая медаль; медальные круги считаются в фоне, поэтому могут появиться не сразу.
     private func updateMedalTarget() {
-        guard mode == .training else { return }
+        guard mode == .challenge else { return }
         let store = MedalStore.shared
         let target = store.nextTarget(on: track.definition.id)
         let run = target.flatMap { store.runs[track.definition.id]?[$0] }
         guard target != medalTarget || (run != nil) != (medalRun != nil) else { return }
         medalTarget = target
         medalRun = run
+        // Время по секторам — против медального круга.
+        bestSplits = run?.splits
         state.medalTarget = target.flatMap { m in run.map { (m, $0.time) } }
         medalGhostCar?.root.removeFromParent()
         medalGhostCar = nil
@@ -862,7 +903,7 @@ final class GameController: NSObject {
     private func respawnOnTrack() {
         let frame = track.frame(atDistance: lastOnTrackDistance)
         let heading = atan2(frame.tangent.x, frame.tangent.y)
-        follower = CarFollower(position: frame.position, heading: heading)
+        follower = CarFollower(position: frame.position, heading: heading, model: carModel)
         car?.update(position: frame.position, heading: heading, speed: 0, steer: 0, braking: false, dt: 0)
         updatePlayerProgress()
         offTrackStreak = 0
@@ -880,6 +921,12 @@ final class GameController: NSObject {
                    : String(format: "Возврат на трассу · +%.0f с", RaceSettings.resetPenalty), good: false,
                    icon: "arrow.uturn.backward.circle.fill")
         snapCamera()
+    }
+
+    private func showCoins(_ amount: Int) {
+        guard amount > 0 else { return }
+        state.coinToast = amount
+        coinTimer = 2.5
     }
 
     private func showDelta(_ delta: Double, label: String) {
