@@ -2,8 +2,9 @@ import RealityKit
 import UIKit
 import simd
 
-/// 3D-сцена трассы: асфальт, поребрики, линии старта и секторов, трава, деревья.
+/// 3D-сцена трассы: асфальт, поребрики, линии старта и секторов, трава; декорации — в Scenery/.
 extension Track {
+    @MainActor
     func makeEntity() -> Entity {
         let root = Entity()
 
@@ -58,7 +59,10 @@ extension Track {
         }
         add(mesh(fromQuads: sectorLines), yellow, to: root)
 
-        addTrees(to: root)
+        let scenery = SceneryBuilder()
+        addTrackside(scenery)
+        addTrees(scenery)
+        scenery.build(into: root)
         return root
     }
 
@@ -101,39 +105,5 @@ extension Track {
         descriptor.normals = MeshBuffers.Normals(Array(repeating: SIMD3<Float>(0, 1, 0), count: positions.count))
         descriptor.primitives = .triangles(indices)
         return try? MeshResource.generate(from: [descriptor])
-    }
-
-    func addTrees(to root: Entity) {
-        let trunkMesh = MeshResource.generateCylinder(height: 1.6, radius: 0.35)
-        let crownMesh = MeshResource.generateCone(height: 4.5, radius: 1.8)
-        let trunkMat = SimpleMaterial(color: UIColor(red: 0.42, green: 0.27, blue: 0.15, alpha: 1), roughness: 1, isMetallic: false)
-        let crownMat = SimpleMaterial(color: UIColor(red: 0.15, green: 0.45, blue: 0.20, alpha: 1), roughness: 1, isMetallic: false)
-
-        let minP = points.reduce(SIMD2<Float>(repeating: .infinity)) { simd_min($0, $1) } - 40
-        let maxP = points.reduce(SIMD2<Float>(repeating: -.infinity)) { simd_max($0, $1) } + 40
-        let area = (maxP.x - minP.x) * (maxP.y - minP.y)
-        let count = min(Int(area / 1500), 700)
-        // Деревья на больших трассах крупнее, чтобы их было видно с дальней камеры.
-        let sizeScale = definition.carScale / 1.5
-
-        var rng = SeededRandom(seed: definition.id.rawValue.utf8.reduce(7) { $0 &* 31 &+ UInt64($1) })
-        var placed = 0, attempts = 0
-        while placed < count && attempts < count * 20 {
-            attempts += 1
-            let p = SIMD2<Float>(rng.next(in: minP.x...maxP.x), rng.next(in: minP.y...maxP.y))
-            // Не ставим деревья на трассу и в зону сразу за ней.
-            guard approximateDistance(p) > halfWidth + curbWidth + 5 * sizeScale else { continue }
-            let tree = Entity()
-            let trunk = ModelEntity(mesh: trunkMesh, materials: [trunkMat])
-            trunk.position.y = 0.8
-            let crown = ModelEntity(mesh: crownMesh, materials: [crownMat])
-            crown.position.y = 1.6 + 2.25
-            tree.addChild(trunk)
-            tree.addChild(crown)
-            tree.position = SIMD3(p.x, 0, p.y)
-            tree.scale = SIMD3(repeating: rng.next(in: 0.7...1.2) * sizeScale)
-            root.addChild(tree)
-            placed += 1
-        }
     }
 }

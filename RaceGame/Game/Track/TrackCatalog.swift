@@ -22,6 +22,8 @@ struct TrackDefinition {
     let width: Float
     /// Визуальный масштаб машины (модель в реальных метрах мелковата на экране телефона).
     let carScale: Float
+    /// Окружение: растительность, щиты, постройки.
+    let scenery: SceneryTheme
 
     static func get(_ id: TrackID) -> TrackDefinition {
         switch id {
@@ -36,7 +38,7 @@ struct TrackDefinition {
 
     static let oval = TrackDefinition(
         id: .oval, name: "Овал", subtitle: "Тренировочная трасса",
-        shape: .stadium(straight: 220, radius: 45), width: 15, carScale: 2)
+        shape: .stadium(straight: 220, radius: 45), width: 15, carScale: 2, scenery: .stadium)
 
     /// «Гавань» — быстрая: длинные прямые, две шиканы, шпилька наверху и длинный вираж к старту.
     static let harbor = TrackDefinition(
@@ -48,7 +50,7 @@ struct TrackDefinition {
             [500, 150], [505, 200], [478, 240], [400, 260], [300, 262], [220, 250], [150, 230], [100, 260],
             [80, 320], [92, 390], [115, 430],
         ], longSide: 1150),
-        width: 15, carScale: 2)
+        width: 15, carScale: 2, scenery: .city)
 
     /// «Перевал» — техничная: шпилька после старта, связка «в гору», петля в инфилде и шикана перед финишем.
     static let pass = TrackDefinition(
@@ -60,7 +62,7 @@ struct TrackDefinition {
             [640, 215], [600, 235], [575, 270], [572, 305], [595, 325], [630, 318], [665, 298], [715, 300],
             [745, 340], [738, 385], [700, 410], [660, 440], [620, 452], [595, 446], [575, 460], [545, 458],
         ], longSide: 1250),
-        width: 15, carScale: 2)
+        width: 15, carScale: 2, scenery: .mountains)
 
     /// «Лесное кольцо» — длинная: больше семи километров поворотов вдоль опушки и «карман» с разворотом.
     static let forest = TrackDefinition(
@@ -74,5 +76,5 @@ struct TrackDefinition {
             [775, 320], [745, 350], [705, 342], [672, 352], [662, 385], [690, 410], [728, 425], [745, 465],
             [715, 505], [650, 525], [560, 520], [490, 525],
         ], longSide: 2100),
-        width: 15, carScale: 2)
+        width: 15, carScale: 2, scenery: .forest)
 }
