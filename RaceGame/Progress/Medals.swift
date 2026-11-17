@@ -37,7 +37,7 @@ enum Medal: Int, CaseIterable, Comparable, Identifiable {
 }
 
 /// Медальный круг: время, время на отсечках секторов и запись для призрака-цели.
-struct MedalRun {
+struct MedalRun: Codable {
     let time: Double
     let splits: [Double]
     let ghost: Ghost
@@ -66,19 +66,61 @@ final class MedalStore {
     /// Для отладки: `-unlockAll` открывает все трассы.
     private let unlockAll = DebugFlags.has("-unlockAll")
 
+    /// Медальные круги берутся из кэша; считаются заново, только если кэша нет или он от другой версии
+    /// (новая сборка или изменилась физика — тогда поднять `cacheVersion`). Считать их — сотни миллисекунд
+    /// работы процессора на трассу, при каждом запуске это тормозило старт.
     func prepare() {
         guard runs.isEmpty else { return }
-        for definition in TrackDefinition.all {
-            Task.detached(priority: .utility) {
+        Task.detached(priority: .utility) {
+            if let cached = MedalStore.loadCache() {
+                await MainActor.run { MedalStore.shared.runs = cached }
+                return
+            }
+            var all: [TrackID: [Medal: MedalRun]] = [:]
+            for definition in TrackDefinition.all {
                 let track = Track(definition)
                 let profile = SpeedProfile.standard(for: track)
                 var result: [Medal: MedalRun] = [:]
                 for medal in Medal.allCases {
                     if let run = MedalStore.simulate(track, profile: profile, skill: medal.skill) { result[medal] = run }
                 }
+                all[definition.id] = result
                 await MainActor.run { MedalStore.shared.runs[definition.id] = result }
             }
+            MedalStore.saveCache(all)
         }
+    }
+
+    // MARK: - Кэш медальных кругов
+
+    /// Поднять при изменении физики машины, профиля скорости или трасс.
+    private nonisolated static let cacheVersion = 1
+
+    private nonisolated static var cacheURL: URL? {
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
+        return FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("medals-v\(cacheVersion)-\(build).json")
+    }
+
+    private nonisolated static func loadCache() -> [TrackID: [Medal: MedalRun]]? {
+        guard let url = cacheURL, let data = try? Data(contentsOf: url),
+              let raw = try? JSONDecoder().decode([String: [Int: MedalRun]].self, from: data) else { return nil }
+        var result: [TrackID: [Medal: MedalRun]] = [:]
+        for (key, runs) in raw {
+            guard let id = TrackID(rawValue: key) else { continue }
+            result[id] = Dictionary(uniqueKeysWithValues: runs.compactMap { k, v in Medal(rawValue: k).map { ($0, v) } })
+        }
+        // Кэш неполный (например, добавили трассу) — считать заново.
+        guard TrackID.allCases.allSatisfy({ result[$0]?.count == Medal.allCases.count }) else { return nil }
+        return result
+    }
+
+    private nonisolated static func saveCache(_ runs: [TrackID: [Medal: MedalRun]]) {
+        guard let url = cacheURL else { return }
+        let raw = Dictionary(uniqueKeysWithValues: runs.map { id, medals in
+            (id.rawValue, Dictionary(uniqueKeysWithValues: medals.map { ($0.key.rawValue, $0.value) }))
+        })
+        try? JSONEncoder().encode(raw).write(to: url, options: .atomic)
     }
 
     func recordsChanged() { revision += 1 }

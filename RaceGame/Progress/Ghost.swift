@@ -2,7 +2,7 @@ import Foundation
 import simd
 
 /// Запись круга: положение, курс и скорость машины через равные промежутки времени.
-struct Ghost {
+struct Ghost: Codable {
     static let interval: Double = 0.05          // 20 раз в секунду
 
     /// (x, z, курс, скорость) на моменты 0, interval, 2·interval, …

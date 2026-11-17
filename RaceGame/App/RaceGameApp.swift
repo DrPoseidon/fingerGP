@@ -28,16 +28,30 @@ struct RootView: View {
     @State private var screen: Screen = Screen.initial
     /// Режим, выбранный на экране режимов, — с ним открывается выбранная трасса.
     @State private var mode: GameMode = Screen.debugMode
+    /// 3D-фон меню создаётся после первого кадра: его создание (сцена RealityKit, шейдеры, музыка) занимает
+    /// пару секунд, и без этого всё это время был бы тёмный экран вместо меню.
+    @State private var backgroundReady = false
 
     var body: some View {
         ZStack {
             switch screen {
             case .menu, .modeSelect, .trackSelect:
                 // Фон с пролётом общий для меню и выбора трассы, чтобы не перезапускался при переходе.
-                FlyoverView()
-                    .ignoresSafeArea()
-                    .overlay(LinearGradient(colors: [.black.opacity(0.45), .clear, .black.opacity(0.55)],
-                                            startPoint: .top, endPoint: .bottom).ignoresSafeArea())
+                Group {
+                    if backgroundReady {
+                        FlyoverView()
+                    } else {
+                        Color("LaunchBackground")
+                    }
+                }
+                .ignoresSafeArea()
+                .overlay(LinearGradient(colors: [.black.opacity(0.45), .clear, .black.opacity(0.55)],
+                                        startPoint: .top, endPoint: .bottom).ignoresSafeArea())
+                .task {
+                    // Дать меню отрисоваться, затем строить сцену.
+                    try? await Task.sleep(for: .milliseconds(150))
+                    backgroundReady = true
+                }
                 if screen == .menu {
                     MenuView(onPlay: { withAnimation(.easeInOut(duration: 0.3)) { screen = .modeSelect } },
                              onGarage: { withAnimation(.easeInOut(duration: 0.3)) { screen = .garage } })
