@@ -23,7 +23,7 @@ enum Rewards {
 
     /// Гонка: за место, с поправкой на длину гонки; первая победа на трассе — бонус.
     static func race(place: Int, on id: TrackID) -> Int {
-        let base = [150, 100, 60, 30][min(max(place, 1), 4) - 1]
+        let base = [150, 110, 80, 55, 35, 20][min(max(place, 1), 6) - 1]
         let factor: Double
         switch id {
         case .oval: factor = 0.8

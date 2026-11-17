@@ -15,13 +15,15 @@ final class RaceSession {
     private(set) var started = false
 
     /// Сколько машин на старте и где стоит игрок (последним — есть кого обгонять).
-    nonisolated static let carCount = 4
+    nonisolated static let carCount = 6
     nonisolated static var playerGridSlot: Int { carCount - 1 }
 
     private static let roster: [(name: String, color: UIColor, skill: Float)] = [
-        ("Синий", UIColor(red: 0.15, green: 0.35, blue: 0.95, alpha: 1), 0.83),
-        ("Зелёный", UIColor(red: 0.1, green: 0.7, blue: 0.3, alpha: 1), 0.78),
-        ("Жёлтый", UIColor(red: 1, green: 0.75, blue: 0.1, alpha: 1), 0.73),
+        ("Синий", UIColor(red: 0.15, green: 0.35, blue: 0.95, alpha: 1), 0.9),
+        ("Фиолетовый", UIColor(red: 0.6, green: 0.25, blue: 0.9, alpha: 1), 0.88),
+        ("Зелёный", UIColor(red: 0.1, green: 0.7, blue: 0.3, alpha: 1), 0.86),
+        ("Голубой", UIColor(red: 0.2, green: 0.8, blue: 0.9, alpha: 1), 0.84),
+        ("Жёлтый", UIColor(red: 1, green: 0.75, blue: 0.1, alpha: 1), 0.82),
     ]
 
     let collisions = RaceSettings.collisions
