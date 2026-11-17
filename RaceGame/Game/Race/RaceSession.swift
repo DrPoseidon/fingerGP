@@ -88,7 +88,8 @@ final class RaceSession {
     /// Загрузить машины соперников (каждая в своей ливрее) и добавить в сцену.
     func loadCars(into anchor: Entity) async {
         for i in opponents.indices where opponents[i].car == nil {
-            guard let car = try? await CarEntity.load(scale: track.definition.carScale, primary: opponents[i].color)
+            guard let car = try? await CarEntity.load(scale: track.definition.carScale, primary: opponents[i].color,
+                                                       detail: .reduced)
             else { continue }
             opponents[i].car = car
             anchor.addChild(car.root)

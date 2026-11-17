@@ -50,11 +50,13 @@ struct TrackCard: View {
                         ForEach(Medal.allCases) { medal in
                             if let time = store.time(medal, on: definition.id) {
                                 let got = earned.map { medal <= $0 } ?? false
+                                // Не полученная медаль — серая и тусклая вместе со временем.
                                 HStack(spacing: 3) {
                                     Image(systemName: "medal.fill").foregroundStyle(Color(medal.color))
                                     Text(formatLapTime(time))
                                 }
-                                .opacity(got ? 1 : 0.45)
+                                .grayscale(got ? 0 : 1)
+                                .opacity(got ? 1 : 0.4)
                             }
                         }
                     }

@@ -14,6 +14,10 @@ final class CarEntity {
     private let wind = Entity()
     private var windLines: [(entity: Entity, phase: Float)] = []
     private var windTime: Float = 0
+    private var windOpacity: Float = 0
+    private let detail: Detail
+    private var exhaustRate: Float = -1
+    private var smokeRate: Float = -1
     private var opacity: Float = 1
     private var wheelAngle: Float = 0
     private let tyreRadius: Float = 0.43
@@ -27,8 +31,9 @@ final class CarEntity {
     /// `primary` — цвет вместо красного (кузов, понтоны, шлем), `secondary` — вместо белого (бока, крылья),
     /// `accent` — вместо синего (воздухозаборник, зеркала, закрылки); `model` — машина из гаража (размер крыльев).
     @MainActor
+    /// `detail: .reduced` — облегчённая машина для соперников: без мелких деталей, тени и выхлопа.
     static func load(scale: Float, primary: UIColor? = nil, secondary: UIColor? = nil, accent: UIColor? = nil,
-                     model carModel: CarModel = .standard) async throws -> CarEntity {
+                     model carModel: CarModel = .standard, detail: Detail = .full) async throws -> CarEntity {
         let task = templateTask ?? Task { try await Entity(named: "race_car") }
         templateTask = task
         do {
@@ -37,11 +42,47 @@ final class CarEntity {
             recolor(model, primary: primary, secondary: secondary, accent: accent)
             scaleParts(of: model, prefix: "fw_", by: carModel.frontWing)
             scaleParts(of: model, prefix: "rw_", by: carModel.rearWing)
-            return CarEntity(model: model, scale: scale)
+            if detail == .reduced { reduce(model) }
+            return CarEntity(model: model, scale: scale, detail: detail)
         } catch {
             templateTask = nil
             throw error
         }
+    }
+
+    enum Detail { case full, reduced }
+
+    /// Детали, которых сверху с высоты камеры не видно, а рисовать их дорого: шлем и дуга безопасности —
+    /// по 11–12 тыс. треугольников, мелочи (подвеска, детали колёс, зеркала) — десятки отдельных вызовов отрисовки.
+    private static let hiddenInReducedModel = ["halo_", "visor", "headrest", "susp_", "driveshaft_",
+                                               "mirror", "diff_strake", "tcam", "rain_light", "shark_fin",
+                                               "floor_edge", "_rim_lip", "_brake_drum", "wheel_FL_inner",
+                                               "wheel_FR_inner", "wheel_RL_inner", "wheel_RR_inner", "_stripe_",
+                                               "_inlet_", "airbox_inlet", "beam_wing"]
+
+    /// Облегчить модель: скрыть мелкие детали, шлем заменить простой сферой того же цвета, убрать тени.
+    @MainActor
+    private static func reduce(_ model: Entity) {
+        func visit(_ e: Entity) {
+            if hiddenInReducedModel.contains(where: { e.name.contains($0) }) {
+                e.isEnabled = false
+                return
+            }
+            if e.name == "helmet", let component = e.components[ModelComponent.self] {
+                let bounds = e.visualBounds(relativeTo: e)
+                let sphere = ModelEntity(mesh: .generateSphere(radius: bounds.extents.max() / 2),
+                                         materials: component.materials.prefix(1).map { $0 })
+                sphere.position = bounds.center
+                sphere.components.set(DynamicLightShadowComponent(castsShadow: false))
+                e.addChild(sphere)
+                e.components.remove(ModelComponent.self)
+            }
+            if e.components.has(ModelComponent.self) {
+                e.components.set(DynamicLightShadowComponent(castsShadow: false))
+            }
+            for child in e.children { visit(child) }
+        }
+        visit(model)
     }
 
     /// Перекрасить ливрею: красный материал — в `primary`, белый — в `secondary`, синий — в `accent`
@@ -90,7 +131,8 @@ final class CarEntity {
         }
     }
 
-    private init(model: Entity, scale: Float) {
+    private init(model: Entity, scale: Float, detail: Detail) {
+        self.detail = detail
         visualScale = scale
         root.addChild(model)
         root.scale = SIMD3(repeating: scale)
@@ -138,7 +180,12 @@ final class CarEntity {
             return
         }
         wind.isEnabled = true
-        wind.components.set(OpacityComponent(opacity: min(0.25 + draft, 1)))
+        // Прозрачность меняется ступенями — компонент не пересоздаётся каждый кадр.
+        let opacity = (min(0.25 + draft, 1) * 10).rounded() / 10
+        if opacity != windOpacity {
+            windOpacity = opacity
+            wind.components.set(OpacityComponent(opacity: opacity))
+        }
         // Линия пролетает от носа (z = 3) к хвосту (z = −4) за ~0.35 с и появляется снова.
         windTime += dt / 0.35
         for (entity, phase) in windLines {
@@ -194,8 +241,8 @@ final class CarEntity {
         p.speed = 0.6
         p.speedVariation = 0.3
         p.mainEmitter.birthRate = 0
-        p.mainEmitter.lifeSpan = 1.4
-        p.mainEmitter.lifeSpanVariation = 0.4
+        p.mainEmitter.lifeSpan = 1.0
+        p.mainEmitter.lifeSpanVariation = 0.3
         p.mainEmitter.size = 0.35
         p.mainEmitter.sizeVariation = 0.1
         p.mainEmitter.sizeMultiplierAtEndOfLifespan = 5
@@ -210,15 +257,26 @@ final class CarEntity {
     }
 
     /// `throttle` 0…1 — насколько машина разгоняется; `smoke` 0…1 — сила дыма из-под колёс.
+    /// Частицы — главный расход GPU (полупрозрачные слои перекрывают друг друга), поэтому их немного,
+    /// у соперников — ещё меньше, а эмиттеры обновляются, только когда интенсивность заметно меняется.
     func updateEffects(speed: Float, throttle: Float, smoke: Float) {
-        if var p = exhaust.components[ParticleEmitterComponent.self] {
-            p.mainEmitter.birthRate = speed < 0.3 && throttle == 0 ? 6 : 14 + 50 * throttle
-            exhaust.components.set(p)
+        let exhaustTarget: Float = detail == .reduced ? 0 : speed < 0.3 && throttle == 0 ? 6 : 14 + 40 * throttle
+        if abs(exhaustTarget - exhaustRate) > 4 || (exhaustTarget == 0) != (exhaustRate == 0) {
+            exhaustRate = exhaustTarget
+            if var p = exhaust.components[ParticleEmitterComponent.self] {
+                p.mainEmitter.birthRate = exhaustTarget
+                exhaust.components.set(p)
+            }
         }
-        for e in tyreSmoke {
-            guard var p = e.components[ParticleEmitterComponent.self] else { continue }
-            p.mainEmitter.birthRate = smoke > 0.02 ? 25 + 90 * smoke : 0
-            e.components.set(p)
+        let maxSmoke: Float = detail == .reduced ? 30 : 60
+        let smokeTarget: Float = smoke > 0.02 ? maxSmoke * (0.25 + 0.75 * smoke) : 0
+        if abs(smokeTarget - smokeRate) > 4 || (smokeTarget == 0) != (smokeRate == 0) {
+            smokeRate = smokeTarget
+            for e in tyreSmoke {
+                guard var p = e.components[ParticleEmitterComponent.self] else { continue }
+                p.mainEmitter.birthRate = smokeTarget
+                e.components.set(p)
+            }
         }
     }
 
